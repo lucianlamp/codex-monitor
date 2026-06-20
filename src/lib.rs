@@ -4,7 +4,10 @@ pub const CLIENT_INFO_TITLE: &str = "Codex Control Bridge";
 
 pub mod cli;
 pub mod client;
+pub mod delivery;
 pub mod protocol;
+pub mod sources;
+pub mod state;
 pub mod target;
 pub mod transport;
 
