@@ -5,6 +5,7 @@ pub const CLIENT_INFO_TITLE: &str = "Codex Control Bridge";
 pub mod cli;
 pub mod client;
 pub mod protocol;
+pub mod target;
 pub mod transport;
 
 pub async fn run_cli() -> anyhow::Result<i32> {

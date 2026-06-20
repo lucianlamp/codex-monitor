@@ -12,7 +12,7 @@
     {"id": "P1", "status": "completed", "title": "Scaffold Cargo package and naming contract"},
     {"id": "P2", "status": "completed", "title": "Protocol builders and classifiers"},
     {"id": "P3", "status": "completed", "title": "Transport trait, memory transport, client"},
-    {"id": "P4", "status": "pending", "title": "Target resolver and CLI shell"},
+    {"id": "P4", "status": "completed", "title": "Target resolver and CLI shell"},
     {"id": "P5", "status": "pending", "title": "Source event, delivery formatting, state"},
     {"id": "P6", "status": "pending", "title": "agmsg SQLite adapter"},
     {"id": "P7", "status": "pending", "title": "ws, stdio, Unix transports"},
@@ -30,7 +30,10 @@
       {"packet": "P2", "command": "cargo fmt --check", "status": "passed"},
       {"packet": "P3", "command": "cargo test --lib client::tests", "status": "passed"},
       {"packet": "P3", "command": "cargo test --lib protocol::tests", "status": "passed"},
-      {"packet": "P3", "command": "cargo fmt --check", "status": "passed"}
+      {"packet": "P3", "command": "cargo fmt --check", "status": "passed"},
+      {"packet": "P4", "command": "cargo test --lib target::tests", "status": "passed"},
+      {"packet": "P4", "command": "cargo test --test cli_contract", "status": "passed"},
+      {"packet": "P4", "command": "cargo fmt --check", "status": "passed"}
     ]
   }
 }

@@ -59,6 +59,38 @@ pub async fn run_from_env() -> anyhow::Result<i32> {
     run(cli).await
 }
 
-pub async fn run(_cli: Cli) -> anyhow::Result<i32> {
-    Ok(0)
+pub async fn run(cli: Cli) -> anyhow::Result<i32> {
+    let Cli {
+        endpoint,
+        target,
+        command,
+    } = cli;
+
+    match command {
+        Commands::Threads { cwd } => {
+            println!(
+                "threads cwd={cwd} endpoint={:?}",
+                crate::target::endpoint_from_options(endpoint, target)
+            );
+            Ok(0)
+        }
+        Commands::Send { thread, text } => {
+            println!("send thread={thread} bytes={}", text.len());
+            Ok(0)
+        }
+        Commands::Agmsg { command } => match command {
+            AgmsgCommand::Watch {
+                team,
+                name,
+                thread,
+                agmsg_db,
+            } => {
+                println!(
+                    "agmsg watch team={team} name={name} thread={thread} agmsg_db={}",
+                    agmsg_db.unwrap_or_else(|| "-".into())
+                );
+                Ok(0)
+            }
+        },
+    }
 }
