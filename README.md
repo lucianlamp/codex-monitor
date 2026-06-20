@@ -38,6 +38,9 @@ $HOME/.codex/app-server-control/app-server-control.sock
 
 The agmsg adapter reads the message store directly and does not use Codex
 shims, PATH replacement, SessionStart hooks, `inbox.sh`, or `watch.sh`.
+The SQLite adapter is enabled on macOS/Linux builds; Windows builds keep the
+CLI and WebSocket/stdio transports available and return a clear unsupported
+error for `agmsg watch`.
 
 Default agmsg DB:
 

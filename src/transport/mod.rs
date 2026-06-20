@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::target::{default_app_socket_path, Endpoint};
+use crate::target::Endpoint;
 
 pub mod memory;
 pub mod stdio;
@@ -51,9 +51,10 @@ pub async fn open_endpoint_transport(
         Endpoint::App => {
             #[cfg(unix)]
             {
-                let transport =
-                    crate::transport::unix::UnixTransport::connect(&default_app_socket_path())
-                        .await?;
+                let transport = crate::transport::unix::UnixTransport::connect(
+                    &crate::target::default_app_socket_path(),
+                )
+                .await?;
                 Ok(Box::new(transport))
             }
             #[cfg(not(unix))]

@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 use codex_control_bridge::delivery::format_event_for_turn;
 use codex_control_bridge::sources::agmsg::AgmsgSource;
 

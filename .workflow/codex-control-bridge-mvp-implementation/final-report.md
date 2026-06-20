@@ -22,6 +22,8 @@ foreground delivery loop, CLI commands, fake app-server tests, README, and CI.
 - Implemented `ccb threads`, `ccb send`, and `ccb agmsg watch`.
 - Implemented direct SQLite agmsg adapter without PATH shims, SessionStart
   hooks, `inbox.sh`, or `watch.sh`.
+- Windows target excludes the SQLite C dependency and returns a clear
+  unsupported error for `agmsg watch`; ws/stdio CLI targets compile on Windows.
 - Added JSON state persistence and last-seen tracking.
 - Added fake app-server integration tests for threads and send.
 - Added real app-server `thread/list` response parsing for the current
@@ -52,19 +54,16 @@ foreground delivery loop, CLI commands, fake app-server tests, README, and CI.
 - `cargo fmt --check`: passed.
 - `cargo test`: passed.
 - `cargo clippy --all-targets -- -D warnings`: passed.
-- `target/debug/ccb threads --cwd /Users/ysk411/dev/codex-control-bridge`:
+- `cargo check --target x86_64-pc-windows-msvc`: passed.
+- `cargo check --tests --target x86_64-pc-windows-msvc`: passed.
+- `cargo run --bin ccb -- threads --cwd /Users/ysk411/dev/codex-control-bridge`:
   passed with exit 0 against a real managed loopback app-server.
 - Managed child cleanup check printed no `codex app-server --listen
   ws://127.0.0.1` process after the smoke command.
-- `cargo check --target x86_64-pc-windows-msvc`: environment failure on this
-  macOS host because the MSVC C standard headers/toolchain are unavailable for
-  `libsqlite3-sys`; the Rust target is installed and CI runs the check on
-  Windows.
 - Workflow verifier passed for `.workflow/codex-control-bridge-mvp-implementation`.
 
 ## Remaining Risks
 
-- Windows build should be confirmed on the configured Windows CI runner.
 - Live `--target app threads` App daemon attach smoke is read-only and optional; live `send`
   requires explicit user approval.
 
