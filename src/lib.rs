@@ -3,7 +3,9 @@ pub const CLIENT_INFO_NAME: &str = "codex-control-bridge";
 pub const CLIENT_INFO_TITLE: &str = "Codex Control Bridge";
 
 pub mod cli;
+pub mod client;
 pub mod protocol;
+pub mod transport;
 
 pub async fn run_cli() -> anyhow::Result<i32> {
     cli::run_from_env().await
