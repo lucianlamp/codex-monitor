@@ -27,13 +27,53 @@ pub fn format_event_for_turn(event: &BridgeEvent) -> String {
 }
 
 pub async fn run_agmsg_watch(
-    _endpoint: crate::target::Endpoint,
-    _team: String,
-    _name: String,
-    _thread: String,
-    _agmsg_db: Option<String>,
+    endpoint: crate::target::Endpoint,
+    team: String,
+    name: String,
+    thread: String,
+    agmsg_db: Option<String>,
 ) -> anyhow::Result<i32> {
-    anyhow::bail!("agmsg watch is wired in Task 9")
+    let db_path = agmsg_db
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(crate::sources::agmsg::AgmsgSource::default_db_path);
+    let state_path = default_state_path()?;
+    let store = crate::state::StateStore::new(state_path);
+    let mut state = store.load().await?;
+    let state_key = format!("agmsg:{team}:{name}");
+    let source = crate::sources::agmsg::AgmsgSource::new(db_path, team, name);
+
+    let transport = crate::transport::open_endpoint_transport(endpoint).await?;
+    let mut client = crate::client::AppServerClient::new(transport);
+    client.initialize().await?;
+
+    loop {
+        let last_seen = state.last_seen(&state_key);
+        for event in source.poll_after(last_seen)? {
+            let text = format_event_for_turn(&event);
+            client.turn_start_and_wait(&thread, &text).await?;
+            if let Some(raw_id) = event
+                .metadata
+                .get("agmsg_id")
+                .and_then(|id| id.parse::<u64>().ok())
+            {
+                state.mark_seen(state_key.clone(), raw_id);
+                store.save(&state).await?;
+            }
+        }
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => return Ok(0),
+            _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+        }
+    }
+}
+
+fn default_state_path() -> anyhow::Result<std::path::PathBuf> {
+    let dirs = directories::ProjectDirs::from("", "", "codex-control-bridge")
+        .ok_or_else(|| anyhow::anyhow!("could not resolve local state directory"))?;
+    Ok(dirs
+        .state_dir()
+        .unwrap_or_else(|| dirs.cache_dir())
+        .join("state.json"))
 }
 
 #[cfg(test)]

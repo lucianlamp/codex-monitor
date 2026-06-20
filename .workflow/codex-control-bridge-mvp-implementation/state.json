@@ -17,7 +17,7 @@
     {"id": "P6", "status": "completed", "title": "agmsg SQLite adapter"},
     {"id": "P7", "status": "completed", "title": "ws, stdio, Unix transports"},
     {"id": "P8", "status": "completed", "title": "Real CLI commands and fake app-server"},
-    {"id": "P9", "status": "pending", "title": "agmsg watch delivery loop"},
+    {"id": "P9", "status": "completed", "title": "agmsg watch delivery loop"},
     {"id": "P10", "status": "pending", "title": "README, CI, final verification"}
   ],
   "verification": {
@@ -45,7 +45,11 @@
       {"packet": "P7", "command": "cargo fmt --check", "status": "passed"},
       {"packet": "P8", "command": "cargo test --test fake_app_server", "status": "passed"},
       {"packet": "P8", "command": "cargo test --test cli_contract", "status": "passed"},
-      {"packet": "P8", "command": "cargo fmt --check", "status": "passed"}
+      {"packet": "P8", "command": "cargo fmt --check", "status": "passed"},
+      {"packet": "P9", "command": "cargo test --test agmsg_adapter", "status": "passed"},
+      {"packet": "P9", "command": "cargo test --test fake_app_server", "status": "passed"},
+      {"packet": "P9", "command": "cargo test", "status": "passed"},
+      {"packet": "P9", "command": "cargo fmt --check", "status": "passed"}
     ]
   }
 }

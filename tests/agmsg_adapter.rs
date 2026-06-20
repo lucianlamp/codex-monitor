@@ -1,3 +1,4 @@
+use codex_control_bridge::delivery::format_event_for_turn;
 use codex_control_bridge::sources::agmsg::AgmsgSource;
 
 fn create_fixture_db(path: &std::path::Path) {
@@ -56,4 +57,19 @@ fn polls_matching_messages_in_ascending_order() {
         .map(|event| event.metadata.get("agmsg_id").unwrap().as_str())
         .collect::<Vec<_>>();
     assert_eq!(ids, vec!["1", "3"]);
+}
+
+#[test]
+fn agmsg_event_formats_for_delivery() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("messages.db");
+    create_fixture_db(&db_path);
+
+    let source = AgmsgSource::new(db_path, "dev".into(), "sally".into());
+    let events = source.poll_after(0).unwrap();
+    let text = format_event_for_turn(&events[0]);
+
+    assert!(text.contains("Team: dev"));
+    assert!(text.contains("Recipient: sally"));
+    assert!(text.contains("first"));
 }
