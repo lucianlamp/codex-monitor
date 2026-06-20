@@ -1,0 +1,36 @@
+[package]
+name = "codex-control-bridge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Local-first bridge for delivering external events into Codex app-server."
+
+[lib]
+name = "codex_control_bridge"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-control-bridge"
+path = "src/main.rs"
+
+[[bin]]
+name = "ccb"
+path = "src/bin/ccb.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+async-trait = "0.1.89"
+clap = { version = "4.6.1", features = ["derive", "env"] }
+directories = "6.0.0"
+futures-util = "0.3.32"
+http = "1.4.2"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = "0.29.0"
+url = "2.5.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"

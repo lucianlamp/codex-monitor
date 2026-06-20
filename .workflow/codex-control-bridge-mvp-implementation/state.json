@@ -1,0 +1,30 @@
+{
+  "title": "codex-control-bridge MVP implementation",
+  "slug": "codex-control-bridge-mvp-implementation",
+  "created_at": "2026-06-20T05:46:05+00:00",
+  "status": "in_progress",
+  "approval": {
+    "required": false,
+    "granted": true,
+    "notes": "Local implementation and fake-server verification are approved by the user request. Live mutating Codex thread operations and delegated workers remain gated."
+  },
+  "packets": [
+    {"id": "P1", "status": "completed", "title": "Scaffold Cargo package and naming contract"},
+    {"id": "P2", "status": "pending", "title": "Protocol builders and classifiers"},
+    {"id": "P3", "status": "pending", "title": "Transport trait, memory transport, client"},
+    {"id": "P4", "status": "pending", "title": "Target resolver and CLI shell"},
+    {"id": "P5", "status": "pending", "title": "Source event, delivery formatting, state"},
+    {"id": "P6", "status": "pending", "title": "agmsg SQLite adapter"},
+    {"id": "P7", "status": "pending", "title": "ws, stdio, Unix transports"},
+    {"id": "P8", "status": "pending", "title": "Real CLI commands and fake app-server"},
+    {"id": "P9", "status": "pending", "title": "agmsg watch delivery loop"},
+    {"id": "P10", "status": "pending", "title": "README, CI, final verification"}
+  ],
+  "verification": {
+    "status": "in_progress",
+    "checks": [
+      {"packet": "P1", "command": "cargo test --test cli_contract", "status": "passed"},
+      {"packet": "P1", "command": "cargo fmt --check", "status": "passed"}
+    ]
+  }
+}
