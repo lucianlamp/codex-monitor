@@ -2,6 +2,11 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 pub mod memory;
+pub mod stdio;
+pub mod ws;
+
+#[cfg(unix)]
+pub mod unix;
 
 #[async_trait]
 pub trait AppServerTransport: Send {
