@@ -10,7 +10,7 @@
   },
   "packets": [
     {"id": "P1", "status": "completed", "title": "Scaffold Cargo package and naming contract"},
-    {"id": "P2", "status": "pending", "title": "Protocol builders and classifiers"},
+    {"id": "P2", "status": "completed", "title": "Protocol builders and classifiers"},
     {"id": "P3", "status": "pending", "title": "Transport trait, memory transport, client"},
     {"id": "P4", "status": "pending", "title": "Target resolver and CLI shell"},
     {"id": "P5", "status": "pending", "title": "Source event, delivery formatting, state"},
@@ -24,7 +24,10 @@
     "status": "in_progress",
     "checks": [
       {"packet": "P1", "command": "cargo test --test cli_contract", "status": "passed"},
-      {"packet": "P1", "command": "cargo fmt --check", "status": "passed"}
+      {"packet": "P1", "command": "cargo fmt --check", "status": "passed"},
+      {"packet": "P2", "command": "cargo test --lib protocol::tests", "status": "passed"},
+      {"packet": "P2", "command": "cargo test --test cli_contract", "status": "passed"},
+      {"packet": "P2", "command": "cargo fmt --check", "status": "passed"}
     ]
   }
 }
