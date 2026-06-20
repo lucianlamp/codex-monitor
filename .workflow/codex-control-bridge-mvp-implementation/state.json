@@ -51,8 +51,12 @@
       {"packet": "P9", "command": "cargo test", "status": "passed"},
       {"packet": "P9", "command": "cargo fmt --check", "status": "passed"},
       {"packet": "P10", "command": "cargo fmt --check", "status": "passed"},
+      {"packet": "P10", "command": "cargo test --lib target::tests", "status": "passed"},
+      {"packet": "P10", "command": "cargo test --test fake_app_server", "status": "passed"},
       {"packet": "P10", "command": "cargo test", "status": "passed"},
       {"packet": "P10", "command": "cargo clippy --all-targets -- -D warnings", "status": "passed"},
+      {"packet": "P10", "command": "target/debug/ccb threads --cwd /Users/ysk411/dev/codex-control-bridge", "status": "passed"},
+      {"packet": "P10", "command": "ps -axo pid,ppid,command | awk '/codex app-server --listen ws:\\/\\/127\\.0\\.0\\.1/ && !/awk/ { print }'", "status": "passed_no_managed_child_remaining"},
       {"packet": "P10", "command": "cargo check --target x86_64-pc-windows-msvc", "status": "failed_environment_missing_msvc_c_headers"}
     ]
   }

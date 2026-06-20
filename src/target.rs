@@ -32,6 +32,7 @@ pub fn parse_thread_list(value: &Value) -> anyhow::Result<Vec<ThreadSummary>> {
     let raw_threads = value
         .get("threads")
         .or_else(|| value.get("items"))
+        .or_else(|| value.get("data"))
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("thread/list response missing threads array"))?;
 
@@ -46,6 +47,8 @@ pub fn parse_thread_list(value: &Value) -> anyhow::Result<Vec<ThreadSummary>> {
             title: thread
                 .get("title")
                 .and_then(Value::as_str)
+                .or_else(|| thread.get("name").and_then(Value::as_str))
+                .or_else(|| thread.get("preview").and_then(Value::as_str))
                 .map(str::to_string),
             cwd: thread
                 .get("cwd")
@@ -120,6 +123,26 @@ mod tests {
         let parsed = parse_thread_list(&value).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].cwd.as_deref(), Some("/tmp/a"));
+    }
+
+    #[test]
+    fn parses_current_app_server_data_shape() {
+        let value = json!({
+            "data": [
+                {
+                    "id": "thread-1",
+                    "name": null,
+                    "preview": "First user message",
+                    "cwd": "/tmp/project"
+                }
+            ],
+            "nextCursor": null
+        });
+        let parsed = parse_thread_list(&value).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].id, "thread-1");
+        assert_eq!(parsed[0].title.as_deref(), Some("First user message"));
+        assert_eq!(parsed[0].cwd.as_deref(), Some("/tmp/project"));
     }
 
     #[test]

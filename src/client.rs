@@ -25,6 +25,10 @@ impl<T: AppServerTransport> AppServerClient<T> {
         self.transport
     }
 
+    pub async fn close(&mut self) -> anyhow::Result<()> {
+        self.transport.close().await
+    }
+
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
         let id = self.alloc_id("initialize");
         self.transport.send(protocol::initialize(id)).await?;

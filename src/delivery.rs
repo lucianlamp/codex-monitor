@@ -46,11 +46,25 @@ pub async fn run_agmsg_watch(
     let mut client = crate::client::AppServerClient::new(transport);
     client.initialize().await?;
 
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
     loop {
         let last_seen = state.last_seen(&state_key);
-        for event in source.poll_after(last_seen)? {
+        let events = match source.poll_after(last_seen) {
+            Ok(events) => events,
+            Err(error) => {
+                let _ = client.close().await;
+                return Err(error);
+            }
+        };
+        for event in events {
             let text = format_event_for_turn(&event);
-            client.turn_start_and_wait(&thread, &text).await?;
+            if let Err(error) = client.turn_start_and_wait(&thread, &text).await {
+                eprintln!("delivery failed for {}: {error:#}", event.event_id);
+                let _ = client.close().await;
+                return Err(error);
+            }
             if let Some(raw_id) = event
                 .metadata
                 .get("agmsg_id")
@@ -60,8 +74,26 @@ pub async fn run_agmsg_watch(
                 store.save(&state).await?;
             }
         }
+
+        #[cfg(unix)]
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => return Ok(0),
+            _ = tokio::signal::ctrl_c() => {
+                client.close().await?;
+                return Ok(0);
+            },
+            _ = sigterm.recv() => {
+                client.close().await?;
+                return Ok(0);
+            },
+            _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+        }
+
+        #[cfg(not(unix))]
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                client.close().await?;
+                return Ok(0);
+            },
             _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
         }
     }

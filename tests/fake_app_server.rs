@@ -31,9 +31,15 @@ async fn start_fake_server() -> String {
                         json!({
                             "id": request["id"],
                             "result": {
-                                "threads": [
-                                    { "id": "thread-1", "title": "One", "cwd": "/tmp/project" }
-                                ]
+                                "data": [
+                                    {
+                                        "id": "thread-1",
+                                        "name": "One",
+                                        "preview": "First user message",
+                                        "cwd": "/tmp/project"
+                                    }
+                                ],
+                                "nextCursor": null
                             }
                         })
                         .to_string()

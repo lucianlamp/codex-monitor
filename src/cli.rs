@@ -68,9 +68,16 @@ pub async fn run(cli: Cli) -> anyhow::Result<i32> {
         Commands::Threads { cwd } => {
             let transport = open_endpoint_transport(endpoint).await?;
             let mut client = AppServerClient::new(transport);
-            client.initialize().await?;
-            let result = client.thread_list_by_cwd(&cwd).await?;
-            for thread in crate::target::parse_thread_list(&result)? {
+            let operation = async {
+                client.initialize().await?;
+                let result = client.thread_list_by_cwd(&cwd).await?;
+                crate::target::parse_thread_list(&result)
+            }
+            .await;
+            let close_result = client.close().await;
+            let threads = operation?;
+            close_result?;
+            for thread in threads {
                 println!(
                     "{}\t{}\t{}",
                     thread.id,
@@ -83,8 +90,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<i32> {
         Commands::Send { thread, text } => {
             let transport = open_endpoint_transport(endpoint).await?;
             let mut client = AppServerClient::new(transport);
-            client.initialize().await?;
-            client.turn_start_and_wait(&thread, &text).await?;
+            let operation = async {
+                client.initialize().await?;
+                client.turn_start_and_wait(&thread, &text).await
+            }
+            .await;
+            let close_result = client.close().await;
+            operation?;
+            close_result?;
             Ok(0)
         }
         Commands::Agmsg { command } => match command {

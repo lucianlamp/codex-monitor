@@ -13,13 +13,15 @@ pub struct StdioTransport {
 
 impl StdioTransport {
     pub async fn spawn() -> anyhow::Result<Self> {
-        let mut child = Command::new("codex")
+        let mut command = Command::new("codex");
+        command
             .arg("app-server")
             .arg("--listen")
             .arg("stdio://")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .spawn()?;
+            .kill_on_drop(true);
+        let mut child = command.spawn()?;
         let stdin = child
             .stdin
             .take()

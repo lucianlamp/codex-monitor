@@ -29,11 +29,13 @@ impl WsTransport {
     pub async fn start_managed() -> anyhow::Result<(String, Self)> {
         let port = pick_free_port().await?;
         let url = format!("ws://127.0.0.1:{port}");
-        let child = Command::new("codex")
+        let mut command = Command::new("codex");
+        command
             .arg("app-server")
             .arg("--listen")
             .arg(&url)
-            .spawn()?;
+            .kill_on_drop(true);
+        let child = command.spawn()?;
         wait_ready(port).await?;
         let (stream, _) = connect_async(&url).await?;
         Ok((
@@ -73,6 +75,14 @@ impl AppServerTransport for WsTransport {
             let _ = child.kill().await;
         }
         Ok(())
+    }
+}
+
+impl Drop for WsTransport {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.start_kill();
+        }
     }
 }
 
