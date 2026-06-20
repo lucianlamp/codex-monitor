@@ -23,6 +23,11 @@ pub fn endpoint_from_options(endpoint: Option<String>, target: crate::cli::Targe
     }
 }
 
+pub fn default_app_socket_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".codex/app-server-control/app-server-control.sock")
+}
+
 pub fn parse_thread_list(value: &Value) -> anyhow::Result<Vec<ThreadSummary>> {
     let raw_threads = value
         .get("threads")

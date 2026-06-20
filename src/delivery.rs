@@ -26,6 +26,16 @@ pub fn format_event_for_turn(event: &BridgeEvent) -> String {
     format!("{}\n\n{}", event.title, event.body)
 }
 
+pub async fn run_agmsg_watch(
+    _endpoint: crate::target::Endpoint,
+    _team: String,
+    _name: String,
+    _thread: String,
+    _agmsg_db: Option<String>,
+) -> anyhow::Result<i32> {
+    anyhow::bail!("agmsg watch is wired in Task 9")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

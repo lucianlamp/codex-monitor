@@ -1,3 +1,6 @@
+use crate::client::AppServerClient;
+use crate::target::endpoint_from_options;
+use crate::transport::open_endpoint_transport;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Parser)]
@@ -60,22 +63,28 @@ pub async fn run_from_env() -> anyhow::Result<i32> {
 }
 
 pub async fn run(cli: Cli) -> anyhow::Result<i32> {
-    let Cli {
-        endpoint,
-        target,
-        command,
-    } = cli;
-
-    match command {
+    let endpoint = endpoint_from_options(cli.endpoint.clone(), cli.target);
+    match cli.command {
         Commands::Threads { cwd } => {
-            println!(
-                "threads cwd={cwd} endpoint={:?}",
-                crate::target::endpoint_from_options(endpoint, target)
-            );
+            let transport = open_endpoint_transport(endpoint).await?;
+            let mut client = AppServerClient::new(transport);
+            client.initialize().await?;
+            let result = client.thread_list_by_cwd(&cwd).await?;
+            for thread in crate::target::parse_thread_list(&result)? {
+                println!(
+                    "{}\t{}\t{}",
+                    thread.id,
+                    thread.title.unwrap_or_else(|| "-".into()),
+                    thread.cwd.unwrap_or_else(|| "-".into())
+                );
+            }
             Ok(0)
         }
         Commands::Send { thread, text } => {
-            println!("send thread={thread} bytes={}", text.len());
+            let transport = open_endpoint_transport(endpoint).await?;
+            let mut client = AppServerClient::new(transport);
+            client.initialize().await?;
+            client.turn_start_and_wait(&thread, &text).await?;
             Ok(0)
         }
         Commands::Agmsg { command } => match command {
@@ -84,13 +93,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<i32> {
                 name,
                 thread,
                 agmsg_db,
-            } => {
-                println!(
-                    "agmsg watch team={team} name={name} thread={thread} agmsg_db={}",
-                    agmsg_db.unwrap_or_else(|| "-".into())
-                );
-                Ok(0)
-            }
+            } => crate::delivery::run_agmsg_watch(endpoint, team, name, thread, agmsg_db).await,
         },
     }
 }
