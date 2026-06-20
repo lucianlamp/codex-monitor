@@ -14,7 +14,7 @@
     {"id": "P3", "status": "completed", "title": "Transport trait, memory transport, client"},
     {"id": "P4", "status": "completed", "title": "Target resolver and CLI shell"},
     {"id": "P5", "status": "completed", "title": "Source event, delivery formatting, state"},
-    {"id": "P6", "status": "pending", "title": "agmsg SQLite adapter"},
+    {"id": "P6", "status": "completed", "title": "agmsg SQLite adapter"},
     {"id": "P7", "status": "pending", "title": "ws, stdio, Unix transports"},
     {"id": "P8", "status": "pending", "title": "Real CLI commands and fake app-server"},
     {"id": "P9", "status": "pending", "title": "agmsg watch delivery loop"},
@@ -36,7 +36,10 @@
       {"packet": "P4", "command": "cargo fmt --check", "status": "passed"},
       {"packet": "P5", "command": "cargo test --lib delivery::tests", "status": "passed"},
       {"packet": "P5", "command": "cargo test --lib state::tests", "status": "passed"},
-      {"packet": "P5", "command": "cargo fmt --check", "status": "passed"}
+      {"packet": "P5", "command": "cargo fmt --check", "status": "passed"},
+      {"packet": "P6", "command": "cargo test --test agmsg_adapter", "status": "passed"},
+      {"packet": "P6", "command": "cargo test --lib delivery::tests", "status": "passed"},
+      {"packet": "P6", "command": "cargo fmt --check", "status": "passed"}
     ]
   }
 }
