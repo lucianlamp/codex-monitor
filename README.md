@@ -7,6 +7,8 @@ The preferred short alias binary is `cdxm`.
 
 ## Install for daily use
 
+### macOS / Linux
+
 One-liner install:
 
 ```bash
@@ -28,6 +30,46 @@ From this repository, the equivalent local install is:
 
 ```bash
 ./install.sh
+```
+
+### Windows native PowerShell
+
+Windows is supported as a native PowerShell install, without Git Bash or WSL:
+
+```powershell
+iwr https://raw.githubusercontent.com/lucianlamp/codex-monitor/main/install.ps1 -UseBasicParsing | iex
+```
+
+From this repository, the equivalent local install is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The Windows installer asks before each user-visible step:
+
+- install `cdxm.exe` and `codex-monitor.exe` under
+  `%USERPROFILE%\.codex-monitor\bin`
+- install the Codex skill under
+  `%USERPROFILE%\.codex\skills\codex-monitor`
+- optionally install a Codex CLI shim at `%USERPROFILE%\.agents\bin\codex.cmd`
+- add `%USERPROFILE%\.codex-monitor\bin` and
+  `%USERPROFILE%\.agents\bin` to the user PATH
+
+The Codex shim prompt defaults to no. If `codex.cmd` already exists, the
+installer never overwrites it; it reports the detected kind and leaves the
+existing entrypoint untouched.
+
+For a non-interactive install with the shim:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -InstallShim
+```
+
+For a local source install without touching the Codex shim:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -NoShim
 ```
 
 For development-only binary refresh:
@@ -324,7 +366,9 @@ The adapter only polls unread inbox rows where `read_at IS NULL`; previously
 read history is ignored even when the codex-monitor cursor state is empty.
 The SQLite adapter is enabled on macOS/Linux builds; Windows builds keep the
 CLI and WebSocket/stdio transports available and return a clear unsupported
-error for `agmsg watch`.
+error for `agmsg watch`. On Windows, use the native PowerShell installer and
+Codex CLI shim for app-server-bound Codex sessions; run agmsg-backed monitoring
+from macOS/Linux until the native SQLite adapter is enabled there.
 
 Default agmsg DB:
 

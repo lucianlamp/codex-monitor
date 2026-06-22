@@ -157,14 +157,14 @@ pub async fn run_monitor_watch(options: MonitorWatchOptions) -> anyhow::Result<i
     }
 }
 
-#[cfg(not(windows))]
 pub fn default_state_path() -> anyhow::Result<std::path::PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "codex-monitor")
         .ok_or_else(|| anyhow::anyhow!("could not resolve local state directory"))?;
-    Ok(dirs
-        .state_dir()
-        .unwrap_or_else(|| dirs.cache_dir())
-        .join("state.json"))
+    #[cfg(windows)]
+    let dir = dirs.data_local_dir();
+    #[cfg(not(windows))]
+    let dir = dirs.state_dir().unwrap_or_else(|| dirs.cache_dir());
+    Ok(dir.join("state.json"))
 }
 
 fn sanitize_field(value: &str) -> String {
@@ -258,5 +258,11 @@ mod tests {
         assert!(line.contains("recipient=sally"));
         assert!(line.contains("sender=kimura"));
         assert!(!line.contains("message_id=-"));
+    }
+
+    #[test]
+    fn default_state_path_points_to_state_json() {
+        let path = super::default_state_path().unwrap();
+        assert_eq!(path.file_name().unwrap(), "state.json");
     }
 }

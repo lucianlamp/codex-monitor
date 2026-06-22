@@ -1930,8 +1930,12 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = accept_async(stream).await.unwrap();
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut ws) = accept_async(stream).await else {
+                return;
+            };
             if ws.next().await.is_some() {
                 tokio::time::sleep(Duration::from_secs(60)).await;
             }
@@ -1943,55 +1947,71 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = accept_async(stream).await.unwrap();
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut ws) = accept_async(stream).await else {
+                return;
+            };
             while let Some(message) = ws.next().await {
-                let Message::Text(text) = message.unwrap() else {
+                let Ok(Message::Text(text)) = message else {
                     continue;
                 };
                 let request: Value = serde_json::from_str(&text).unwrap();
                 match request["method"].as_str().unwrap() {
                     "initialize" => {
-                        ws.send(Message::Text(
-                            json!({ "id": request["id"], "result": {} })
-                                .to_string()
-                                .into(),
-                        ))
-                        .await
-                        .unwrap();
+                        if ws
+                            .send(Message::Text(
+                                json!({ "id": request["id"], "result": {} })
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                     "initialized" => {}
                     "thread/loaded/list" => {
-                        ws.send(Message::Text(
-                            json!({
-                                "id": request["id"],
-                                "result": { "data": ["thread-good"] }
-                            })
-                            .to_string()
-                            .into(),
-                        ))
-                        .await
-                        .unwrap();
+                        if ws
+                            .send(Message::Text(
+                                json!({
+                                    "id": request["id"],
+                                    "result": { "data": ["thread-good"] }
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                     "thread/list" => {
-                        ws.send(Message::Text(
-                            json!({
-                                "id": request["id"],
-                                "result": {
-                                    "data": [
-                                        {
-                                            "id": "thread-good",
-                                            "title": "Good",
-                                            "cwd": cwd
-                                        }
-                                    ]
-                                }
-                            })
-                            .to_string()
-                            .into(),
-                        ))
-                        .await
-                        .unwrap();
+                        if ws
+                            .send(Message::Text(
+                                json!({
+                                    "id": request["id"],
+                                    "result": {
+                                        "data": [
+                                            {
+                                                "id": "thread-good",
+                                                "title": "Good",
+                                                "cwd": cwd
+                                            }
+                                        ]
+                                    }
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                     other => panic!("unexpected method {other}"),
                 }

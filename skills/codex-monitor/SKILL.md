@@ -115,16 +115,41 @@ If the repo was just edited, reinstall from the checkout:
 cargo install --path . --bins --force --debug
 ```
 
+On Windows native PowerShell, install from the checkout with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Use `-InstallShim` only when the user explicitly wants the Codex CLI shim:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -InstallShim
+```
+
 For daily Codex CLI monitor use, confirm the Codex entrypoint is shim-backed:
 
 ```bash
 type -a codex
 ```
 
-The first `codex` should be a shim, normally `$HOME/.agents/bin/codex` on this
-machine. That shim may be agmsg's shim; the important property is that
-interactive CLI launches become app-server-bound so `cdxm targets` can discover
-the live endpoint without the user manually typing `--remote`.
+On Windows, use:
+
+```powershell
+Get-Command cdxm
+Get-Command codex -All
+```
+
+The first `codex` should be a shim, normally `$HOME/.agents/bin/codex` on
+macOS/Linux or `%USERPROFILE%\.agents\bin\codex.cmd` on Windows. That shim may
+be agmsg's shim; the important property is that interactive CLI launches become
+app-server-bound so `cdxm targets` can discover the live endpoint without the
+user manually typing `--remote`.
+
+Windows builds currently support the `cdxm` CLI, WebSocket/stdio transports,
+and Codex CLI shim. The agmsg SQLite adapter still returns an explicit
+unsupported error on Windows; run agmsg-backed watch/doctor flows from
+macOS/Linux until the native SQLite adapter is enabled there.
 
 2. Start agmsg monitor work with the read-only runtime snapshot:
 

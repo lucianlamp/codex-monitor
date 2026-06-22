@@ -105,6 +105,7 @@ pub struct RemoteControlBackendClient {
     pub enrollment_status: Option<String>,
 }
 
+#[cfg(not(windows))]
 #[derive(Debug, Deserialize)]
 struct RemoteControlBackendClientsPage {
     items: Vec<RemoteControlBackendClient>,

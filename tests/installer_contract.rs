@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 fn repo_root() -> &'static Path {
