@@ -1,0 +1,62 @@
+{
+  "title": "Codex Monitor Remote Control Completion",
+  "slug": "remote-control-completion",
+  "created_at": "2026-06-20T15:01:30+00:00",
+  "status": "completed",
+  "approval": {
+    "required": "destructive_or_external_changes_only",
+    "granted": false,
+    "notes": "Read-only diagnostics, local edits, tests, and non-destructive live smoke are allowed. Revoke/delete/sign-out/reset requires explicit user approval."
+  },
+  "packets": [
+    {
+      "id": "P1",
+      "name": "Discovery",
+      "status": "completed"
+    },
+    {
+      "id": "P2",
+      "name": "Implementation",
+      "status": "completed"
+    },
+    {
+      "id": "P3",
+      "name": "Tests and docs",
+      "status": "completed"
+    },
+    {
+      "id": "P4",
+      "name": "Verification",
+      "status": "completed"
+    }
+  ],
+  "verification": {
+    "status": "passed",
+    "checks": [
+      {
+        "command": "python3 /Users/ysk411/.codex/skills/codex-dynamic-workflows/scripts/verify_workflow.py .workflow/remote-control-completion",
+        "status": "passed"
+      },
+      {
+        "command": "cargo fmt --check",
+        "status": "passed"
+      },
+      {
+        "command": "cargo test",
+        "status": "passed"
+      },
+      {
+        "command": "cargo clippy --all-targets -- -D warnings",
+        "status": "passed"
+      },
+      {
+        "command": "cargo install --path . --bin cdxm --force --debug",
+        "status": "passed"
+      },
+      {
+        "command": "cdxm --target app remote doctor",
+        "status": "passed"
+      }
+    ]
+  }
+}

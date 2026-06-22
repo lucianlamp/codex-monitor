@@ -36,6 +36,7 @@ pub async fn open_endpoint_transport(
     endpoint: crate::target::Endpoint,
 ) -> anyhow::Result<Box<dyn AppServerTransport>> {
     match endpoint {
+        Endpoint::Auto => anyhow::bail!("auto endpoint must be resolved before opening transport"),
         Endpoint::Explicit(url) if url.starts_with("ws://") => {
             let transport = crate::transport::ws::WsTransport::connect(&url).await?;
             Ok(Box::new(transport))
@@ -43,6 +44,25 @@ pub async fn open_endpoint_transport(
         Endpoint::Explicit(url) if url == "stdio://" => {
             let transport = crate::transport::stdio::StdioTransport::spawn().await?;
             Ok(Box::new(transport))
+        }
+        Endpoint::Explicit(url) if url.starts_with("unix://") => {
+            #[cfg(unix)]
+            {
+                let raw_path = url
+                    .strip_prefix("unix://")
+                    .expect("starts_with checked above");
+                if raw_path.is_empty() {
+                    anyhow::bail!("unix:// endpoint requires a socket path");
+                }
+                let transport =
+                    crate::transport::unix::UnixTransport::connect(std::path::Path::new(raw_path))
+                        .await?;
+                Ok(Box::new(transport))
+            }
+            #[cfg(not(unix))]
+            {
+                anyhow::bail!("unix:// endpoints require Unix socket support on this platform")
+            }
         }
         Endpoint::Managed => {
             let (_url, transport) = crate::transport::ws::WsTransport::start_managed().await?;

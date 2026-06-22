@@ -59,12 +59,106 @@ pub fn thread_read(id: u64, thread_id: &str, include_turns: bool) -> Value {
     })
 }
 
+pub fn thread_loaded_list(id: u64, limit: u32) -> Value {
+    json!({
+        "method": "thread/loaded/list",
+        "id": id,
+        "params": {
+            "limit": limit
+        }
+    })
+}
+
+pub fn remote_control_status_read(id: u64) -> Value {
+    json!({
+        "method": "remoteControl/status/read",
+        "id": id,
+        "params": null
+    })
+}
+
+pub fn remote_control_enable(id: u64) -> Value {
+    json!({
+        "method": "remoteControl/enable",
+        "id": id,
+        "params": null
+    })
+}
+
+pub fn remote_control_disable(id: u64) -> Value {
+    json!({
+        "method": "remoteControl/disable",
+        "id": id,
+        "params": null
+    })
+}
+
+pub fn remote_control_pairing_start(id: u64, manual_code: bool) -> Value {
+    json!({
+        "method": "remoteControl/pairing/start",
+        "id": id,
+        "params": {
+            "manualCode": manual_code
+        }
+    })
+}
+
+pub fn remote_control_pairing_status(
+    id: u64,
+    pairing_code: Option<&str>,
+    manual_pairing_code: Option<&str>,
+) -> Value {
+    json!({
+        "method": "remoteControl/pairing/status",
+        "id": id,
+        "params": {
+            "pairingCode": pairing_code,
+            "manualPairingCode": manual_pairing_code
+        }
+    })
+}
+
+pub fn remote_control_clients_list(id: u64, environment_id: &str, limit: u32) -> Value {
+    json!({
+        "method": "remoteControl/client/list",
+        "id": id,
+        "params": {
+            "environmentId": environment_id,
+            "limit": limit,
+            "cursor": null,
+            "order": "desc"
+        }
+    })
+}
+
+pub fn account_read(id: u64, refresh_token: bool) -> Value {
+    json!({
+        "method": "account/read",
+        "id": id,
+        "params": {
+            "refreshToken": refresh_token
+        }
+    })
+}
+
 pub fn turn_start(id: u64, thread_id: &str, text: &str) -> Value {
     json!({
         "method": "turn/start",
         "id": id,
         "params": {
             "threadId": thread_id,
+            "input": [{ "type": "text", "text": text }]
+        }
+    })
+}
+
+pub fn turn_steer(id: u64, thread_id: &str, expected_turn_id: &str, text: &str) -> Value {
+    json!({
+        "method": "turn/steer",
+        "id": id,
+        "params": {
+            "threadId": thread_id,
+            "expectedTurnId": expected_turn_id,
             "input": [{ "type": "text", "text": text }]
         }
     })
@@ -108,8 +202,8 @@ mod tests {
         let v = initialize(1);
         assert_eq!(v["method"], "initialize");
         assert_eq!(v["id"], 1);
-        assert_eq!(v["params"]["clientInfo"]["name"], "codex-control-bridge");
-        assert_eq!(v["params"]["clientInfo"]["title"], "Codex Control Bridge");
+        assert_eq!(v["params"]["clientInfo"]["name"], "codex-monitor");
+        assert_eq!(v["params"]["clientInfo"]["title"], "Codex Monitor");
         assert_eq!(v["params"]["clientInfo"]["version"], "0.1.0");
         assert_eq!(v["params"]["capabilities"]["experimentalApi"], true);
     }
@@ -138,10 +232,56 @@ mod tests {
     }
 
     #[test]
+    fn thread_loaded_list_requests_loaded_thread_ids() {
+        let v = thread_loaded_list(4, 100);
+        assert_eq!(v["method"], "thread/loaded/list");
+        assert_eq!(v["params"]["limit"], 100);
+    }
+
+    #[test]
+    fn remote_control_status_read_uses_null_params() {
+        let v = remote_control_status_read(5);
+        assert_eq!(v["method"], "remoteControl/status/read");
+        assert!(v["params"].is_null());
+    }
+
+    #[test]
+    fn remote_control_enable_uses_null_params_for_current_daemon() {
+        let v = remote_control_enable(6);
+        assert_eq!(v["method"], "remoteControl/enable");
+        assert!(v["params"].is_null());
+    }
+
+    #[test]
+    fn remote_control_clients_list_uses_environment_id() {
+        let v = remote_control_clients_list(6, "env-1", 100);
+        assert_eq!(v["method"], "remoteControl/client/list");
+        assert_eq!(v["params"]["environmentId"], "env-1");
+        assert_eq!(v["params"]["order"], "desc");
+    }
+
+    #[test]
+    fn account_read_can_request_token_refresh() {
+        let v = account_read(7, true);
+        assert_eq!(v["method"], "account/read");
+        assert_eq!(v["params"]["refreshToken"], true);
+    }
+
+    #[test]
     fn turn_start_wraps_text_input() {
         let v = turn_start(4, "thread-1", "hello");
         assert_eq!(v["method"], "turn/start");
         assert_eq!(v["params"]["threadId"], "thread-1");
+        assert_eq!(v["params"]["input"][0]["type"], "text");
+        assert_eq!(v["params"]["input"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn turn_steer_wraps_text_input_with_expected_turn_id() {
+        let v = turn_steer(5, "thread-1", "turn-1", "hello");
+        assert_eq!(v["method"], "turn/steer");
+        assert_eq!(v["params"]["threadId"], "thread-1");
+        assert_eq!(v["params"]["expectedTurnId"], "turn-1");
         assert_eq!(v["params"]["input"][0]["type"], "text");
         assert_eq!(v["params"]["input"][0]["text"], "hello");
     }

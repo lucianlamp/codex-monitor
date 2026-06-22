@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: cdxm-agmsg-apply.sh [cwd] [--team <team> --name <agent>] [--mode auto|start|steer] [--dry-run-only] [--foreground] [--no-replace-legacy]
+
+Infer the current agmsg codex identity for cwd, run codex-monitor diagnostics,
+and apply a durable LaunchAgent monitor for the current session persona.
+EOF
+}
+
+project=""
+team=""
+name=""
+mode="${CDXM_MONITOR_MODE:-auto}"
+apply=1
+foreground=0
+replace_legacy=1
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --team)
+      team="${2:?--team requires a value}"
+      shift 2
+      ;;
+    --name)
+      name="${2:?--name requires a value}"
+      shift 2
+      ;;
+    --mode)
+      mode="${2:?--mode requires a value}"
+      shift 2
+      ;;
+    --dry-run-only|--no-apply)
+      apply=0
+      shift
+      ;;
+    --foreground)
+      foreground=1
+      apply=0
+      shift
+      ;;
+    --replace-legacy)
+      replace_legacy=1
+      shift
+      ;;
+    --no-replace-legacy)
+      replace_legacy=0
+      shift
+      ;;
+    --*)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [ -n "$project" ]; then
+        printf 'unexpected extra argument: %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      project="$1"
+      shift
+      ;;
+  esac
+done
+
+project="${project:-$(pwd)}"
+project="$(cd "$project" && pwd)"
+
+case "$mode" in
+  auto|start|steer) ;;
+  *)
+    printf 'invalid --mode: %s\n' "$mode" >&2
+    exit 2
+    ;;
+esac
+
+codex_monitor_bin="${CODEX_MONITOR_BIN:-}"
+if [ -z "$codex_monitor_bin" ]; then
+  if command -v cdxm >/dev/null 2>&1; then
+    codex_monitor_bin="$(command -v cdxm)"
+  elif command -v codex-monitor >/dev/null 2>&1; then
+    codex_monitor_bin="$(command -v codex-monitor)"
+  fi
+fi
+
+if [ -z "$codex_monitor_bin" ]; then
+  printf 'cdxm/codex-monitor not found on PATH\n' >&2
+  exit 127
+fi
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+skill_dir="$(cd "$script_dir/.." && pwd)"
+agmsg_dir="${AGMSG_SCRIPTS_DIR:-$HOME/.agents/skills/agmsg/scripts}"
+whoami_script="$agmsg_dir/whoami.sh"
+identities_script="$agmsg_dir/identities.sh"
+context_script="$script_dir/cdxm-context.sh"
+agmsg_run_dir="${AGMSG_RUN_DIR:-$HOME/.agents/skills/agmsg/run}"
+
+if [ ! -x "$whoami_script" ]; then
+  printf 'agmsg whoami helper not found: %s\n' "$whoami_script" >&2
+  exit 127
+fi
+if [ ! -x "$identities_script" ]; then
+  printf 'agmsg identities helper not found: %s\n' "$identities_script" >&2
+  exit 127
+fi
+
+section() {
+  printf '\n[%s]\n' "$1"
+}
+
+extract_field() {
+  local text="$1"
+  local key="$2"
+  printf '%s\n' "$text" | tr ' ' '\n' | awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }'
+}
+
+extract_tab_field() {
+  local text="$1"
+  local key="$2"
+  printf '%s\n' "$text" | tr '\t' '\n' | awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }'
+}
+
+stop_legacy_codex_bridge_consumers() {
+  local consumers="$1"
+  local line pid args pidfile stopped=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *$'\tkind=codex-bridge'*) ;;
+      *) continue ;;
+    esac
+    pid="$(extract_tab_field "$line" pid)"
+    [ -n "$pid" ] || continue
+    args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+    case "$args" in
+      *codex-bridge.js*|*codex-bridge-launcher.sh*) ;;
+      *) continue ;;
+    esac
+    if kill "$pid" 2>/dev/null; then
+      stopped=$((stopped + 1))
+    fi
+  done <<<"$consumers"
+
+  pidfile="$agmsg_run_dir/codex-bridge.$team.$name.pid"
+  if [ -f "$pidfile" ]; then
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+    case "$args" in
+      *codex-bridge.js*|*codex-bridge-launcher.sh*) rm -f "$pidfile" "${pidfile%.pid}.meta" ;;
+    esac
+  fi
+  printf '%s' "$stopped"
+}
+
+resolve_thread() {
+  if [ -n "${CODEX_THREAD_ID:-}" ]; then
+    printf '%s' "$CODEX_THREAD_ID"
+    return 0
+  fi
+  local sessions_dir="$HOME/.codex/sessions" f first esc cwd tid
+  [ -d "$sessions_dir" ] || return 0
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    first="$(head -1 "$f" 2>/dev/null || true)"
+    case "$first" in *'"session_meta"'*) ;; *) continue ;; esac
+    esc="$(printf '%s' "$first" | sed "s/'/''/g")"
+    cwd="$(sqlite3 ":memory:" "SELECT COALESCE(json_extract('$esc','\$.payload.cwd'),'')" 2>/dev/null || true)"
+    [ "$cwd" = "$project" ] || continue
+    tid="$(sqlite3 ":memory:" "SELECT COALESCE(json_extract('$esc','\$.payload.id'),'')" 2>/dev/null || true)"
+    [ -n "$tid" ] && { printf '%s' "$tid"; return 0; }
+  done <<EOF
+$(ls -t "$sessions_dir"/*/*/*/rollout-*.jsonl 2>/dev/null | head -20)
+EOF
+  return 0
+}
+
+resolve_team_for_name() {
+  local wanted_name="$1"
+  "$identities_script" "$project" codex \
+    | awk -v n="$wanted_name" 'NF >= 2 && $2 == n { print $1 }' \
+    | awk '!seen[$0]++'
+}
+
+thread="$(resolve_thread)"
+project_hash="$(printf '%s' "$project" | shasum | awk '{print $1}')"
+marker_name=""
+if [ -n "$thread" ] && [ -f "$agmsg_run_dir/codex-name.$project_hash.$thread" ]; then
+  marker_name="$(head -1 "$agmsg_run_dir/codex-name.$project_hash.$thread" 2>/dev/null || true)"
+fi
+
+if [ -z "$team" ] && [ -n "${CDXM_MONITOR_TEAM:-}" ]; then team="$CDXM_MONITOR_TEAM"; fi
+if [ -z "$name" ] && [ -n "${CDXM_MONITOR_NAME:-}" ]; then name="$CDXM_MONITOR_NAME"; fi
+if [ -z "$team" ] && [ -n "${AGMSG_TEAM:-}" ]; then team="$AGMSG_TEAM"; fi
+if [ -z "$name" ] && [ -n "${AGMSG_AGENT:-}" ]; then name="$AGMSG_AGENT"; fi
+if [ -z "$name" ] && [ -n "${AGMSG_CODEX_NAME:-}" ]; then name="$AGMSG_CODEX_NAME"; fi
+if [ -z "$name" ] && [ -n "$marker_name" ]; then name="$marker_name"; fi
+
+if [ -n "$name" ] && [ -z "$team" ]; then
+  matching_teams="$(resolve_team_for_name "$name" | paste -sd, -)"
+  case "$matching_teams" in
+    "")
+      printf 'codex-monitor cannot apply: %s is not a registered codex identity for %s.\n' "$name" "$project" >&2
+      exit 2
+      ;;
+    *,*)
+      printf 'codex-monitor needs explicit team: %s exists in multiple teams (%s). Specify --team.\n' "$name" "$matching_teams" >&2
+      exit 2
+      ;;
+    *)
+      team="$matching_teams"
+      ;;
+  esac
+fi
+
+if [ -z "$team" ] || [ -z "$name" ]; then
+  section "agmsg identity"
+  whoami_output="$("$whoami_script" "$project" codex)"
+  printf '%s\n' "$whoami_output"
+
+  case "$whoami_output" in
+    multiple=true*)
+      printf 'codex-monitor apply needs the current persona: multiple identities are registered for this cwd, and no session marker/env identified which one this Codex is acting as. Run `/agmsg actas <name>` first, launch with AGMSG_CODEX_NAME=<name>, or pass --team/--name.\n' >&2
+      exit 2
+      ;;
+    suggest=true*)
+      printf 'codex-monitor needs an exact joined identity: this cwd is not joined exactly, but other identities were suggested. Join or specify --team/--name explicitly.\n' >&2
+      exit 2
+      ;;
+    not_joined=true*)
+      printf 'codex-monitor cannot apply: this cwd is not joined to an agmsg team for codex.\n' >&2
+      exit 2
+      ;;
+  esac
+
+  name="${name:-$(extract_field "$whoami_output" agent)}"
+  team="${team:-$(extract_field "$whoami_output" teams)}"
+fi
+
+if [ -z "$team" ] || [ -z "$name" ]; then
+  printf 'codex-monitor needs team/name: could not resolve the current session persona.\n' >&2
+  exit 2
+fi
+
+case "$team" in
+  *,*)
+    printf 'codex-monitor needs explicit team: multiple teams matched (%s). Specify --team explicitly.\n' "$team" >&2
+    exit 2
+    ;;
+esac
+
+section "selection"
+printf 'cwd=%s\nteam=%s\nname=%s\nmode=%s\nthread=%s\n' "$project" "$team" "$name" "$mode" "${thread:-auto}"
+
+if [ -x "$context_script" ]; then
+  "$context_script" "$project" "$team" "$name"
+fi
+
+section "doctor"
+watch_args=(--team "$team" --name "$name" --cwd "$project" --mode "$mode")
+if [ -n "$thread" ]; then
+  watch_args+=(--thread "$thread")
+fi
+
+doctor_output="$("$codex_monitor_bin" agmsg doctor "${watch_args[@]}")"
+printf '%s\n' "$doctor_output"
+
+target_consumer="$(printf '%s\n' "$doctor_output" | grep -F $'doctor\tconsumer\ttarget' || true)"
+if printf '%s\n' "$target_consumer" | grep -F 'kind=codex-monitor-agmsg-watch' >/dev/null; then
+  printf 'codex-monitor already has an active target consumer for %s/%s; leaving it in place.\n' "$team" "$name"
+  exit 0
+fi
+
+legacy_replace_pending=0
+legacy_target_consumer="$(printf '%s\n' "$target_consumer" | grep -F 'kind=codex-bridge' || true)"
+other_target_consumer="$(printf '%s\n' "$target_consumer" | grep -v -F 'kind=codex-bridge' || true)"
+if [ -n "$legacy_target_consumer" ]; then
+  if [ "$replace_legacy" -eq 1 ] && { [ "$apply" -eq 1 ] || [ "$foreground" -eq 1 ]; }; then
+    printf 'codex-monitor explicit apply: legacy codex-bridge target consumer for %s/%s will be replaced after dry-run succeeds.\n' "$team" "$name"
+    legacy_replace_pending=1
+  elif [ "$replace_legacy" -eq 0 ]; then
+    printf 'legacy codex-bridge target consumer already receives %s/%s; --no-replace-legacy prevents codex-monitor install.\n' "$team" "$name"
+    printf '%s\n' "$legacy_target_consumer"
+    exit 0
+  else
+    printf 'legacy codex-bridge target consumer already receives %s/%s; dry-run continues without replacing it.\n' "$team" "$name"
+  fi
+fi
+
+if [ -n "$other_target_consumer" ]; then
+  printf 'another active target consumer already receives %s/%s; not installing a second monitor to avoid duplicate delivery.\n' "$team" "$name"
+  printf '%s\n' "$other_target_consumer"
+  exit 0
+fi
+
+section "dry run"
+"$codex_monitor_bin" monitor watch agmsg "${watch_args[@]}" --dry-run
+
+if [ "$legacy_replace_pending" -eq 1 ]; then
+  section "replace legacy"
+  stopped="$(stop_legacy_codex_bridge_consumers "$legacy_target_consumer")"
+  printf 'stopped legacy codex-bridge process(es): %s\n' "$stopped"
+  sleep 0.3
+fi
+
+if [ "$foreground" -eq 1 ]; then
+  section "foreground watch"
+  exec "$codex_monitor_bin" monitor watch agmsg "${watch_args[@]}"
+fi
+
+if [ "$apply" -eq 0 ]; then
+  printf '\nnext: %s agmsg launch-agent install' "$codex_monitor_bin"
+  printf ' %s' "${watch_args[@]}"
+  printf ' --force --load\n'
+  exit 0
+fi
+
+section "launch-agent"
+status_output="$("$codex_monitor_bin" agmsg launch-agent status --team "$team" --name "$name" 2>&1 || true)"
+printf '%s\n' "$status_output"
+if printf '%s\n' "$status_output" | grep -q 'installed=true' \
+  && printf '%s\n' "$status_output" | grep -q 'loaded=true'; then
+  printf 'codex-monitor LaunchAgent already installed and loaded for %s/%s.\n' "$team" "$name"
+  exit 0
+fi
+
+"$codex_monitor_bin" agmsg launch-agent install "${watch_args[@]}" --force --load
+"$codex_monitor_bin" agmsg launch-agent status --team "$team" --name "$name"

@@ -1,11 +1,19 @@
 use anyhow::{anyhow, bail};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Endpoint {
+    Auto,
     Managed,
     App,
     Explicit(String),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct EndpointCandidate {
+    pub endpoint: Endpoint,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -19,8 +27,169 @@ pub fn endpoint_from_options(endpoint: Option<String>, target: crate::cli::Targe
     match endpoint {
         Some(url) => Endpoint::Explicit(url),
         None if target == crate::cli::TargetKind::App => Endpoint::App,
-        None => Endpoint::Managed,
+        None if target == crate::cli::TargetKind::Managed => Endpoint::Managed,
+        None => Endpoint::Auto,
     }
+}
+
+pub fn resolve_default_auto_endpoint(endpoint: Endpoint) -> anyhow::Result<Endpoint> {
+    if endpoint != Endpoint::Auto {
+        return Ok(endpoint);
+    }
+
+    let candidates = discover_auto_endpoint_candidates();
+    match candidates.as_slice() {
+        [] => Ok(Endpoint::Managed),
+        [candidate] => Ok(candidate.endpoint.clone()),
+        candidates => {
+            let choices = candidates
+                .iter()
+                .map(|candidate| {
+                    format!(
+                        "{} ({})",
+                        endpoint_label(&candidate.endpoint),
+                        candidate.source
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "multiple auto endpoints found; pass --endpoint or --target explicitly: {choices}"
+            )
+        }
+    }
+}
+
+pub fn discover_auto_endpoint_candidates() -> Vec<EndpointCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for key in [
+        "CDXM_ENDPOINT",
+        "CODEX_MONITOR_ENDPOINT",
+        "CODEX_APP_SERVER_ENDPOINT",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            if let Some(endpoint) = explicit_endpoint_from_url(value.trim()) {
+                push_candidate(&mut candidates, &mut seen, endpoint, key.to_string());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    if default_app_socket_path().exists() {
+        push_candidate(
+            &mut candidates,
+            &mut seen,
+            Endpoint::App,
+            "codex-app-control-socket".to_string(),
+        );
+    }
+
+    for candidate in discover_process_endpoint_candidates() {
+        push_candidate(
+            &mut candidates,
+            &mut seen,
+            candidate.endpoint,
+            candidate.source,
+        );
+    }
+
+    candidates
+}
+
+pub fn endpoint_label(endpoint: &Endpoint) -> String {
+    match endpoint {
+        Endpoint::Auto => "auto".to_string(),
+        Endpoint::Managed => "managed".to_string(),
+        Endpoint::App => format!("app:{}", default_app_socket_path().display()),
+        Endpoint::Explicit(url) => url.clone(),
+    }
+}
+
+fn push_candidate(
+    candidates: &mut Vec<EndpointCandidate>,
+    seen: &mut BTreeSet<String>,
+    endpoint: Endpoint,
+    source: String,
+) {
+    let label = endpoint_label(&endpoint);
+    if seen.insert(label) {
+        candidates.push(EndpointCandidate { endpoint, source });
+    }
+}
+
+fn explicit_endpoint_from_url(value: &str) -> Option<Endpoint> {
+    if value.starts_with("ws://") || value.starts_with("unix://") || value == "stdio://" {
+        Some(Endpoint::Explicit(value.to_string()))
+    } else {
+        None
+    }
+}
+
+#[cfg(unix)]
+fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "command="])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            discover_endpoint_candidates_from_process_text(&text)
+        }
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(not(unix))]
+fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
+    Vec::new()
+}
+
+pub fn discover_endpoint_candidates_from_process_text(text: &str) -> Vec<EndpointCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    for line in text.lines() {
+        if !(line.contains("codex") || line.contains("Codex")) {
+            continue;
+        }
+        for (source, endpoint) in endpoints_from_process_line(line) {
+            push_candidate(&mut candidates, &mut seen, endpoint, source);
+        }
+    }
+    candidates
+}
+
+fn endpoints_from_process_line(line: &str) -> Vec<(String, Endpoint)> {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    let mut endpoints = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let value = match *token {
+            "--remote" | "--app-server" | "--listen" => tokens.get(index + 1).copied(),
+            _ => token
+                .strip_prefix("--remote=")
+                .or_else(|| token.strip_prefix("--app-server="))
+                .or_else(|| token.strip_prefix("--listen=")),
+        };
+        let Some(value) = value else {
+            continue;
+        };
+        if value == "stdio://" || value == "unix://" {
+            continue;
+        }
+        let Some(endpoint) = explicit_endpoint_from_url(value) else {
+            continue;
+        };
+        let source = if line.contains(" --remote ") || line.contains("--remote=") {
+            "codex-cli-remote"
+        } else if line.contains("codex-bridge") || line.contains("--app-server") {
+            "agmsg-codex-bridge"
+        } else {
+            "codex-app-server-process"
+        };
+        endpoints.push((source.to_string(), endpoint));
+    }
+    endpoints
 }
 
 pub fn default_app_socket_path() -> std::path::PathBuf {
@@ -75,6 +244,20 @@ pub fn resolve_single_thread(threads: &[ThreadSummary]) -> anyhow::Result<String
     }
 }
 
+pub fn parse_loaded_thread_list(value: &Value) -> anyhow::Result<Vec<String>> {
+    let raw_threads = value
+        .get("data")
+        .or_else(|| value.get("threadIds"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("thread/loaded/list response missing data array"))?;
+
+    Ok(raw_threads
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,7 +268,7 @@ mod tests {
         assert_eq!(
             endpoint_from_options(
                 Some("ws://127.0.0.1:7777".into()),
-                crate::cli::TargetKind::App
+                crate::cli::TargetKind::Auto
             ),
             Endpoint::Explicit("ws://127.0.0.1:7777".into())
         );
@@ -96,6 +279,37 @@ mod tests {
         assert_eq!(
             endpoint_from_options(None, crate::cli::TargetKind::Managed),
             Endpoint::Managed
+        );
+        assert_eq!(
+            endpoint_from_options(None, crate::cli::TargetKind::Auto),
+            Endpoint::Auto
+        );
+    }
+
+    #[test]
+    fn discovers_live_cli_endpoints_from_process_text() {
+        let text = r#"
+/opt/homebrew/bin/codex --remote unix:///tmp/codex-cli.sock
+node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --app-server unix:///tmp/bridge.sock --thread t1
+/opt/homebrew/bin/codex app-server --listen unix:///tmp/server.sock
+/opt/homebrew/bin/codex app-server --listen unix://
+        "#;
+        let parsed = discover_endpoint_candidates_from_process_text(text);
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].source, "codex-cli-remote");
+        assert_eq!(
+            parsed[0].endpoint,
+            Endpoint::Explicit("unix:///tmp/codex-cli.sock".to_string())
+        );
+        assert_eq!(parsed[1].source, "agmsg-codex-bridge");
+        assert_eq!(
+            parsed[1].endpoint,
+            Endpoint::Explicit("unix:///tmp/bridge.sock".to_string())
+        );
+        assert_eq!(parsed[2].source, "codex-app-server-process");
+        assert_eq!(
+            parsed[2].endpoint,
+            Endpoint::Explicit("unix:///tmp/server.sock".to_string())
         );
     }
 
@@ -176,5 +390,20 @@ mod tests {
         ];
         let error = resolve_single_thread(&two).unwrap_err();
         assert!(error.to_string().contains("multiple matching threads"));
+    }
+
+    #[test]
+    fn parses_loaded_thread_list() {
+        let parsed = parse_loaded_thread_list(&json!({
+            "data": ["thread-1", "thread-2"],
+            "nextCursor": null
+        }))
+        .unwrap();
+        assert_eq!(parsed, vec!["thread-1", "thread-2"]);
+
+        let error = parse_loaded_thread_list(&json!({ "threads": [] })).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("thread/loaded/list response missing data array"));
     }
 }

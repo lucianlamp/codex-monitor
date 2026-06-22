@@ -1,0 +1,84 @@
+{
+  "title": "codex-monitor remote-control monitor bridge",
+  "slug": "codex-monitor-project-analysis",
+  "created_at": "2026-06-20T07:58:35+00:00",
+  "updated_at": "2026-06-20T11:38:06Z",
+  "status": "completed_with_live_blocker",
+  "approval": {
+    "required": false,
+    "granted": true,
+    "notes": "Local implementation, tests, and requested non-destructive live smoke only."
+  },
+  "packets": [
+    {
+      "id": "P1",
+      "status": "completed",
+      "objective": "Extract Codex App remote-control refresh, WebSocket, and device-key contracts."
+    },
+    {
+      "id": "P2",
+      "status": "completed",
+      "objective": "Implement Rust helpers and cdxm remote connect."
+    },
+    {
+      "id": "P3",
+      "status": "completed",
+      "objective": "Add fake backend/WebSocket E2E, unit tests, and README docs."
+    },
+    {
+      "id": "P4",
+      "status": "completed_with_live_blocker",
+      "objective": "Run local verification, install binary, and run bounded live smoke."
+    }
+  ],
+  "verification": {
+    "status": "completed_with_live_blocker",
+    "checks": [
+      {
+        "command": "cargo test remote_control::tests --lib",
+        "status": "passed"
+      },
+      {
+        "command": "cargo test remote_connect_completes_device_key_websocket_handshake",
+        "status": "passed"
+      },
+      {
+        "command": "cargo test",
+        "status": "passed"
+      },
+      {
+        "command": "cargo fmt --check",
+        "status": "passed"
+      },
+      {
+        "command": "git diff --check",
+        "status": "passed"
+      },
+      {
+        "command": "cargo clippy --all-targets -- -D warnings",
+        "status": "passed"
+      },
+      {
+        "command": "cargo check --target x86_64-pc-windows-msvc",
+        "status": "passed"
+      },
+      {
+        "command": "cargo check --tests --target x86_64-pc-windows-msvc",
+        "status": "passed"
+      },
+      {
+        "command": "cargo install --path . --bin cdxm --force --debug",
+        "status": "passed"
+      },
+      {
+        "command": "/Users/ysk411/.cargo/bin/cdxm --target app remote status",
+        "status": "passed"
+      },
+      {
+        "command": "/Users/ysk411/.cargo/bin/cdxm --target app remote connect --timeout-ms 10000",
+        "status": "blocked_external_state",
+        "detail": "Codex App remote-control enrollment exists, but native device-key lookup returns device key not found for that client."
+      }
+    ]
+  }
+}

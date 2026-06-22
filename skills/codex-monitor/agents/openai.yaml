@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Monitor"
+  short_description: "Route monitor adapters into loaded Codex threads"
+  default_prompt: "Use $codex-monitor to apply the current joined agmsg persona monitor safely."

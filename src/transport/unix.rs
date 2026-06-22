@@ -3,13 +3,15 @@ use async_trait::async_trait;
 #[cfg(unix)]
 use futures_util::{SinkExt, StreamExt};
 #[cfg(unix)]
-use http::Request;
-#[cfg(unix)]
 use serde_json::Value;
 #[cfg(unix)]
 use tokio::net::UnixStream;
 #[cfg(unix)]
-use tokio_tungstenite::{client_async, tungstenite::protocol::Message, WebSocketStream};
+use tokio_tungstenite::{
+    client_async,
+    tungstenite::{client::IntoClientRequest, protocol::Message},
+    WebSocketStream,
+};
 
 #[cfg(unix)]
 use super::AppServerTransport;
@@ -23,10 +25,7 @@ pub struct UnixTransport {
 impl UnixTransport {
     pub async fn connect(path: &std::path::Path) -> anyhow::Result<Self> {
         let stream = UnixStream::connect(path).await?;
-        let request = Request::builder()
-            .uri("ws://localhost/")
-            .header("Host", "localhost")
-            .body(())?;
+        let request = "ws://localhost/".into_client_request()?;
         let (stream, _) = client_async(request, stream).await?;
         Ok(Self { stream })
     }
@@ -57,5 +56,29 @@ impl AppServerTransport for UnixTransport {
     async fn close(&mut self) -> anyhow::Result<()> {
         let _ = self.stream.close(None).await;
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use tokio::net::UnixListener;
+    use tokio_tungstenite::accept_async;
+
+    #[tokio::test]
+    async fn unix_transport_performs_valid_websocket_handshake() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("app-server.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            ws.close(None).await.unwrap();
+        });
+
+        let mut transport = UnixTransport::connect(&socket_path).await.unwrap();
+        transport.close().await.unwrap();
+        server.await.unwrap();
     }
 }
