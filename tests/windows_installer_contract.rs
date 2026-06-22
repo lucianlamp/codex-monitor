@@ -55,6 +55,20 @@ fn windows_shim_arg_parser_avoids_reserved_args_automatic_variable() {
 }
 
 #[test]
+fn windows_shim_detects_app_server_port_from_stderr() {
+    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
+
+    // codex >= 0.130 prints "listening on: ws://..." to stderr, so the shim
+    // must read the app-server's stderr log (not just stdout) when detecting
+    // the listening port, or its managed path times out.
+    assert!(installer.contains("listening on:"));
+    assert!(
+        installer.contains("Get-Content -Raw $serverErr"),
+        "Ensure-AppServer must read the app-server stderr log to detect the listening port"
+    );
+}
+
+#[test]
 fn windows_codex_cmd_prefers_powershell_7() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
 

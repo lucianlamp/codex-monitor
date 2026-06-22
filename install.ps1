@@ -277,7 +277,7 @@ function Ensure-AppServer {
 
         $deadline = (Get-Date).AddSeconds(15)
         while ((Get-Date) -lt $deadline) {
-            $log = Get-Content -Raw $serverLog -ErrorAction SilentlyContinue
+            $log = "$(Get-Content -Raw $serverLog -ErrorAction SilentlyContinue)`n$(Get-Content -Raw $serverErr -ErrorAction SilentlyContinue)"
             if ($log -match 'listening on:\s*ws://127\.0\.0\.1:(\d+)') {
                 $port = [int]$Matches[1]
                 break
