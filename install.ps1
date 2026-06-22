@@ -157,13 +157,13 @@ function Resolve-RealCodex {
 }
 
 function Get-ProjectFromArgs {
-    param([string[]]$Args)
+    param([string[]]$Tokens)
 
     $project = (Get-Location).Path
-    for ($i = 0; $i -lt $Args.Count; $i++) {
-        $arg = $Args[$i]
-        if (($arg -eq '--cd' -or $arg -eq '--cwd' -or $arg -eq '-C') -and ($i + 1 -lt $Args.Count)) {
-            $project = $Args[$i + 1]
+    for ($i = 0; $i -lt $Tokens.Count; $i++) {
+        $arg = $Tokens[$i]
+        if (($arg -eq '--cd' -or $arg -eq '--cwd' -or $arg -eq '-C') -and ($i + 1 -lt $Tokens.Count)) {
+            $project = $Tokens[$i + 1]
             $i++
             continue
         }
@@ -179,11 +179,11 @@ function Get-ProjectFromArgs {
 }
 
 function Get-FirstNonOption {
-    param([string[]]$Args)
+    param([string[]]$Tokens)
 
-    for ($i = 0; $i -lt $Args.Count; $i++) {
-        $arg = $Args[$i]
-        if (($arg -eq '--cd' -or $arg -eq '--cwd' -or $arg -eq '-C') -and ($i + 1 -lt $Args.Count)) {
+    for ($i = 0; $i -lt $Tokens.Count; $i++) {
+        $arg = $Tokens[$i]
+        if (($arg -eq '--cd' -or $arg -eq '--cwd' -or $arg -eq '-C') -and ($i + 1 -lt $Tokens.Count)) {
             $i++
             continue
         }
@@ -348,7 +348,12 @@ function Write-CdxmCodexCmd {
 @echo off
 set "CODEX_MONITOR_SHIM_WRAPPER=1"
 set "CODEX_MONITOR_SHIM_TARGET=%~f0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ShimScript" %*
+where pwsh >nul 2>nul
+if "%ERRORLEVEL%"=="0" (
+    pwsh -NoProfile -ExecutionPolicy Bypass -File "$ShimScript" %*
+) else (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ShimScript" %*
+)
 "@
     Set-Content -Path $ShimTarget -Value $cmd -Encoding ASCII
     Write-Host "Installed Codex monitor shim to $ShimTarget"

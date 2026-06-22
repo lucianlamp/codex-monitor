@@ -36,3 +36,31 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("never overwrites"));
     assert!(readme.contains("MSVC Build Tools"));
 }
+
+#[test]
+fn windows_shim_arg_parser_avoids_reserved_args_automatic_variable() {
+    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
+
+    // `$Args` is a PowerShell automatic variable; binding it as a function
+    // parameter silently yields an empty array, which made every `codex <cmd>`
+    // miss the passthrough list and spawn an app-server instead of delegating
+    // to the real codex. The arg helpers must use a non-reserved parameter.
+    assert!(
+        !installer.contains("[string[]]$Args"),
+        "shim arg helpers must not bind the reserved $Args automatic variable"
+    );
+    assert!(installer.contains("function Get-FirstNonOption"));
+    assert!(installer.contains("function Get-ProjectFromArgs"));
+    assert!(installer.contains("[string[]]$Tokens"));
+}
+
+#[test]
+fn windows_codex_cmd_prefers_powershell_7() {
+    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
+
+    // The generated codex.cmd runs the shim under PowerShell 7 (`pwsh`) when
+    // available, falling back to Windows PowerShell (`powershell.exe`).
+    assert!(installer.contains("where pwsh"));
+    assert!(installer.contains("pwsh -NoProfile -ExecutionPolicy Bypass -File"));
+    assert!(installer.contains("powershell.exe -NoProfile -ExecutionPolicy Bypass -File"));
+}
