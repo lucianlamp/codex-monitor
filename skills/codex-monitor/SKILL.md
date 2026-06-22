@@ -62,6 +62,13 @@ legacy bridge before foreground watch or LaunchAgent install. Do not stop
 unrelated consumers or other roles. `--dry-run-only` remains read-only, and
 `--no-replace-legacy` keeps the legacy bridge in place.
 
+An active codex-monitor consumer is only current when the pinned `--thread`
+matches the thread selected for this session. If the same `team/name` is already
+running with a different pinned thread, treat it as stale: run dry-run, refresh
+the LaunchAgent with `--force --load`, and use `launch-agent status` /
+`doctor` `desired_thread`, `active_thread`, and `args_match` fields to verify
+the running job actually moved.
+
 When the user sends exactly `$cdxm agmsg` or a terse variant like
 `$cdxm agmsg <team> <name>`, treat it as an operational request to optimize the
 current cwd for codex-monitor-backed agmsg receiving. Do not reply with syntax only.
@@ -249,7 +256,9 @@ delivery.
   recreate controller device keys.
 - Do not stop existing `codex-bridge`, `cdxm agmsg watch`, or LaunchAgent
   processes unless the user explicitly asks. `$codex-monitor` apply is explicit
-  replacement intent for the same `team/name` legacy `codex-bridge` only.
+  replacement intent for the same `team/name` legacy `codex-bridge`, and
+  refresh intent for a same `team/name` codex-monitor watcher whose pinned
+  thread no longer matches the selected thread.
 - If a live delivery test is needed, use a temporary agmsg DB and unique
   `team/name`, then remove the temporary DB after proof is collected.
 

@@ -71,3 +71,77 @@ fn installer_never_overwrites_existing_codex_entrypoint() {
     assert!(String::from_utf8_lossy(&output.stdout)
         .contains("leaving existing codex entrypoint untouched"));
 }
+
+#[test]
+fn agmsg_apply_does_not_treat_stale_thread_consumer_as_active() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    let fake_bin = temp.path().join("bin");
+    let fake_agmsg = temp.path().join("agmsg");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&fake_bin).unwrap();
+    fs::create_dir_all(&fake_agmsg).unwrap();
+
+    let fake_cdxm = fake_bin.join("cdxm");
+    fs::write(
+        &fake_cdxm,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"agmsg doctor"*)
+    printf 'doctor\tconsumer\ttarget\tpid=52232\tkind=codex-monitor-agmsg-watch\tteam=emeria\tname=codex\tthread=old-thread\tcommand=cdxm agmsg watch --team emeria --name codex --thread old-thread\n'
+    ;;
+  *"monitor watch agmsg"*"--dry-run"*)
+    printf 'dry-run ok\n'
+    ;;
+  *)
+    printf 'unexpected cdxm args: %s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&fake_cdxm, fs::Permissions::from_mode(0o755)).unwrap();
+
+    for helper in ["whoami.sh", "identities.sh"] {
+        let path = fake_agmsg.join(helper);
+        fs::write(&path, "#!/usr/bin/env bash\nexit 0\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let apply_script = temp.path().join("cdxm-agmsg-apply.sh");
+    fs::copy(
+        repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-apply.sh"),
+        &apply_script,
+    )
+    .unwrap();
+    fs::set_permissions(&apply_script, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new("bash")
+        .arg(&apply_script)
+        .arg(&project)
+        .args(["--team", "emeria", "--name", "codex", "--dry-run-only"])
+        .env("HOME", &home)
+        .env("CODEX_THREAD_ID", "current-thread")
+        .env("CODEX_MONITOR_BIN", &fake_cdxm)
+        .env("AGMSG_SCRIPTS_DIR", &fake_agmsg)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("stale thread pin"));
+    assert!(stdout.contains("old-thread"));
+    assert!(stdout.contains("current-thread"));
+    assert!(stdout.contains("dry-run ok"));
+    assert!(!stdout.contains("already has an active target consumer"));
+}

@@ -120,7 +120,8 @@ cdxm --target app remote connect
   smoke criterion.
 - `agmsg doctor` is the runtime truth command before installing or replacing a
   watcher: targets, matching loaded threads, state key/id, inbox ids,
-  LaunchAgents/log mtimes, active consumers, and same-team processes.
+  LaunchAgents/log mtimes, desired vs active LaunchAgent arguments, active
+  consumers, pinned consumer thread, and same-team processes.
 - LaunchAgent labels are stable per team/name:
   `com.local.codex-monitor.agmsg.<team>.<name>`.
 
@@ -166,6 +167,10 @@ event` separately in the intended thread, and remove the temp directory.
 - No agmsg delivery: run `cdxm agmsg doctor --team <team> --name <name> --cwd
   <path>` and verify the message row's `team`, `to_agent`, and id are greater
   than the saved state for `agmsg:<team>:<name>`.
+- Stale LaunchAgent args: compare `launch-agent status` `desired_thread`,
+  `active_thread`, and `args_match`. If the plist was updated but launchd is
+  still running old arguments, reinstall with `--force --load`; the installer
+  bootouts an existing job before bootstrapping the updated plist.
 - Stale LaunchAgent errors: compare `launch-agent status` stderr mtime with the
   latest state id and `doctor` inbox rows before assuming the current watcher is
   failing.

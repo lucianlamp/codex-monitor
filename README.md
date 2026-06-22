@@ -491,8 +491,9 @@ change cwd, endpoint, or DB settings. If multiple agents share a team, choose
 the exact `--name`; do not install a second watcher for a role that already has
 another bridge delivering the same inbox.
 
-`launch-agent status` includes stdout/stderr log paths and mtimes so stale
-errors are easier to distinguish from current failures.
+`launch-agent status` includes stdout/stderr log paths, mtimes, desired thread,
+active thread, and `args_match`. This makes stale launchd ProgramArguments
+visible instead of hiding them behind `installed=true loaded=true`.
 
 ## Safety
 

@@ -273,14 +273,37 @@ doctor_output="$("$codex_monitor_bin" agmsg doctor "${watch_args[@]}")"
 printf '%s\n' "$doctor_output"
 
 target_consumer="$(printf '%s\n' "$doctor_output" | grep -F $'doctor\tconsumer\ttarget' || true)"
-if printf '%s\n' "$target_consumer" | grep -F 'kind=codex-monitor-agmsg-watch' >/dev/null; then
+monitor_target_consumer="$(printf '%s\n' "$target_consumer" | grep -F 'kind=codex-monitor-agmsg-watch' || true)"
+active_monitor_consumer=""
+stale_monitor_consumer=""
+if [ -n "$monitor_target_consumer" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    consumer_thread="$(extract_tab_field "$line" thread)"
+    [ "$consumer_thread" = "-" ] && consumer_thread=""
+    if [ -z "$thread" ] || [ "$consumer_thread" = "$thread" ]; then
+      active_monitor_consumer="${active_monitor_consumer}${line}"$'\n'
+    else
+      stale_monitor_consumer="${stale_monitor_consumer}${line}"$'\n'
+    fi
+  done <<<"$monitor_target_consumer"
+fi
+
+if [ -n "$active_monitor_consumer" ]; then
   printf 'codex-monitor already has an active target consumer for %s/%s; leaving it in place.\n' "$team" "$name"
   exit 0
+fi
+if [ -n "$stale_monitor_consumer" ]; then
+  stale_thread="$(extract_tab_field "$stale_monitor_consumer" thread)"
+  [ "$stale_thread" = "-" ] && stale_thread=""
+  printf 'codex-monitor detected a stale thread pin for %s/%s: existing=%s desired=%s. Continuing to dry-run and refresh the LaunchAgent; repair manually with: %s agmsg launch-agent install' "$team" "$name" "${stale_thread:-unpinned}" "${thread:-auto}" "$codex_monitor_bin"
+  printf ' %s' "${watch_args[@]}"
+  printf ' --force --load\n'
 fi
 
 legacy_replace_pending=0
 legacy_target_consumer="$(printf '%s\n' "$target_consumer" | grep -F 'kind=codex-bridge' || true)"
-other_target_consumer="$(printf '%s\n' "$target_consumer" | grep -v -F 'kind=codex-bridge' || true)"
+other_target_consumer="$(printf '%s\n' "$target_consumer" | grep -v -F 'kind=codex-bridge' | grep -v -F 'kind=codex-monitor-agmsg-watch' || true)"
 if [ -n "$legacy_target_consumer" ]; then
   if [ "$replace_legacy" -eq 1 ] && { [ "$apply" -eq 1 ] || [ "$foreground" -eq 1 ]; }; then
     printf 'codex-monitor explicit apply: legacy codex-bridge target consumer for %s/%s will be replaced after dry-run succeeds.\n' "$team" "$name"
@@ -327,8 +350,16 @@ status_output="$("$codex_monitor_bin" agmsg launch-agent status --team "$team" -
 printf '%s\n' "$status_output"
 if printf '%s\n' "$status_output" | grep -q 'installed=true' \
   && printf '%s\n' "$status_output" | grep -q 'loaded=true'; then
+  status_active_thread="$(extract_tab_field "$status_output" active_thread)"
+  status_args_match="$(extract_tab_field "$status_output" args_match)"
+  if [ -n "$thread" ] && [ "$status_active_thread" != "$thread" ]; then
+    printf 'codex-monitor LaunchAgent is loaded for %s/%s but has stale active_thread=%s desired=%s; reinstalling with --force --load.\n' "$team" "$name" "${status_active_thread:-unknown}" "$thread"
+  elif [ "$status_args_match" = "false" ]; then
+    printf 'codex-monitor LaunchAgent plist and active arguments differ for %s/%s; reinstalling with --force --load.\n' "$team" "$name"
+  else
   printf 'codex-monitor LaunchAgent already installed and loaded for %s/%s.\n' "$team" "$name"
   exit 0
+  fi
 fi
 
 "$codex_monitor_bin" agmsg launch-agent install "${watch_args[@]}" --force --load

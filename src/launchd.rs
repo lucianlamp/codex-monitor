@@ -18,6 +18,11 @@ pub struct LaunchAgentStatus {
     pub plist_path: PathBuf,
     pub installed: bool,
     pub loaded: Option<bool>,
+    pub desired_arguments: Vec<String>,
+    pub active_arguments: Vec<String>,
+    pub arguments_match: Option<bool>,
+    pub desired_thread: Option<String>,
+    pub active_thread: Option<String>,
     pub stdout_log: LaunchAgentLogStatus,
     pub stderr_log: LaunchAgentLogStatus,
     pub detail: String,
@@ -135,7 +140,7 @@ pub fn install_agmsg_watch_agent(
     std::fs::create_dir_all(log_dir()?)?;
     std::fs::write(&plist_path, render_agmsg_watch_plist(config)?)?;
     if load {
-        bootstrap_agent(&plist_path)?;
+        reload_agent(&label, &plist_path)?;
     }
     Ok(LaunchAgentInstallResult {
         label,
@@ -172,11 +177,35 @@ pub fn status_for_agmsg_watch_agent(team: &str, name: &str) -> anyhow::Result<La
         Ok(output) => (Some(false), String::from_utf8_lossy(&output.stderr).into()),
         Err(error) => (None, error.to_string()),
     };
+    let desired_arguments = if installed {
+        std::fs::read_to_string(&plist_path)
+            .map(|plist| parse_program_arguments_from_plist(&plist))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let active_arguments = if loaded == Some(true) {
+        parse_launchctl_arguments(&detail)
+    } else {
+        Vec::new()
+    };
+    let arguments_match = if desired_arguments.is_empty() || active_arguments.is_empty() {
+        None
+    } else {
+        Some(desired_arguments == active_arguments)
+    };
+    let desired_thread = argument_value(&desired_arguments, "--thread");
+    let active_thread = argument_value(&active_arguments, "--thread");
     Ok(LaunchAgentStatus {
         label,
         plist_path,
         installed,
         loaded,
+        desired_arguments,
+        active_arguments,
+        arguments_match,
+        desired_thread,
+        active_thread,
         stdout_log,
         stderr_log,
         detail,
@@ -293,15 +322,114 @@ fn send_mode_arg(mode: crate::cli::SendMode) -> &'static str {
     }
 }
 
-fn bootstrap_agent(plist_path: &std::path::Path) -> anyhow::Result<()> {
+fn reload_agent(label: &str, plist_path: &std::path::Path) -> anyhow::Result<()> {
+    let service = format!("gui/{}/{}", user_id()?, label);
     let domain = format!("gui/{}", user_id()?);
-    let status = std::process::Command::new("launchctl")
-        .args(["bootstrap", &domain, &plist_path.to_string_lossy()])
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("launchctl bootstrap failed for {}", plist_path.display());
+    let print = std::process::Command::new("launchctl")
+        .args(["print", &service])
+        .output();
+    if matches!(print, Ok(output) if output.status.success()) {
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootout", &service])
+            .status();
+    }
+    bootstrap_agent(&domain, &service, plist_path)
+}
+
+fn bootstrap_agent(
+    domain: &str,
+    service: &str,
+    plist_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let plist_text = plist_path.to_string_lossy();
+    let output = std::process::Command::new("launchctl")
+        .args(["bootstrap", domain, &plist_text])
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "launchctl bootstrap failed for {}: {}{}plist was updated, but a running job may still use old ProgramArguments; try `launchctl bootout {}` then `launchctl bootstrap {} {}`",
+            plist_path.display(),
+            stderr,
+            stdout,
+            service,
+            domain,
+            plist_path.display()
+        );
     }
     Ok(())
+}
+
+fn parse_program_arguments_from_plist(plist: &str) -> Vec<String> {
+    let mut saw_program_arguments = false;
+    let mut in_array = false;
+    let mut args = Vec::new();
+    for line in plist.lines() {
+        let line = line.trim();
+        if line == "<key>ProgramArguments</key>" {
+            saw_program_arguments = true;
+            continue;
+        }
+        if saw_program_arguments && line == "<array>" {
+            in_array = true;
+            continue;
+        }
+        if in_array && line == "</array>" {
+            break;
+        }
+        if !in_array {
+            continue;
+        }
+        if let Some(value) = line
+            .strip_prefix("<string>")
+            .and_then(|value| value.strip_suffix("</string>"))
+        {
+            args.push(unescape_xml(value));
+        }
+    }
+    args
+}
+
+fn parse_launchctl_arguments(detail: &str) -> Vec<String> {
+    let mut in_arguments = false;
+    let mut args = Vec::new();
+    for line in detail.lines() {
+        let line = line.trim();
+        if line == "arguments = {" {
+            in_arguments = true;
+            continue;
+        }
+        if in_arguments && line == "}" {
+            break;
+        }
+        if !in_arguments || line.is_empty() {
+            continue;
+        }
+        args.push(line.trim_matches('"').to_string());
+    }
+    args
+}
+
+fn argument_value(args: &[String], flag: &str) -> Option<String> {
+    for (index, arg) in args.iter().enumerate() {
+        if arg == flag {
+            return args.get(index + 1).cloned();
+        }
+        if let Some(value) = arg.strip_prefix(&format!("{flag}=")) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn unescape_xml(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn user_id() -> anyhow::Result<String> {
@@ -450,5 +578,50 @@ mod tests {
         assert_eq!(parsed.team, "emeria");
         assert_eq!(parsed.name, "steve");
         assert!(parse_agmsg_launch_agent_label("com.example.other").is_none());
+    }
+
+    #[test]
+    fn parses_desired_and_active_launch_agent_arguments_for_thread_diff() {
+        let config = AgmsgLaunchAgentConfig {
+            team: "emeria".into(),
+            name: "codex".into(),
+            thread: Some("new-thread".into()),
+            cwd: PathBuf::from("/Users/ysk411/dev/emeriasaga"),
+            mode: crate::cli::SendMode::Auto,
+            codex_monitor_path: PathBuf::from("/Users/ysk411/.cargo/bin/cdxm"),
+            endpoint: crate::target::Endpoint::Auto,
+            agmsg_db: None,
+        };
+        let plist = render_agmsg_watch_plist(&config).unwrap();
+        let desired = parse_program_arguments_from_plist(&plist);
+        let active = parse_launchctl_arguments(
+            r#"
+gui/501/com.local.codex-monitor.agmsg.emeria.codex = {
+    arguments = {
+        /Users/ysk411/.cargo/bin/cdxm
+        agmsg
+        watch
+        --team
+        emeria
+        --name
+        codex
+        --thread
+        old-thread
+        --cwd
+        /Users/ysk411/dev/emeriasaga
+    }
+}
+"#,
+        );
+
+        assert_eq!(
+            argument_value(&desired, "--thread").as_deref(),
+            Some("new-thread")
+        );
+        assert_eq!(
+            argument_value(&active, "--thread").as_deref(),
+            Some("old-thread")
+        );
+        assert_ne!(desired, active);
     }
 }

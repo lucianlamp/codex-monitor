@@ -589,10 +589,13 @@ fn print_launch_agent_status(status: &crate::launchd::LaunchAgentStatus) {
         None => "unknown",
     };
     println!(
-        "status\t{}\tinstalled={}\tloaded={}\tplist={}\tstdout_log={}\tstdout_mtime={}\tstderr_log={}\tstderr_mtime={}",
+        "status\t{}\tinstalled={}\tloaded={}\targs_match={}\tdesired_thread={}\tactive_thread={}\tplist={}\tstdout_log={}\tstdout_mtime={}\tstderr_log={}\tstderr_mtime={}",
         status.label,
         status.installed,
         loaded,
+        format_optional_bool(status.arguments_match),
+        format_optional_str(status.desired_thread.as_deref()),
+        format_optional_str(status.active_thread.as_deref()),
         status.plist_path.display(),
         status.stdout_log.path.display(),
         format_optional_u128(status.stdout_log.modified_unix_ms),
@@ -737,6 +740,18 @@ async fn run_agmsg_doctor(
                 &format!("label={}", status.label),
                 &format!("installed={}", status.installed),
                 &format!("loaded={loaded}"),
+                &format!(
+                    "args_match={}",
+                    format_optional_bool(status.arguments_match)
+                ),
+                &format!(
+                    "desired_thread={}",
+                    format_optional_str(status.desired_thread.as_deref())
+                ),
+                &format!(
+                    "active_thread={}",
+                    format_optional_str(status.active_thread.as_deref())
+                ),
                 &format!("plist={}", status.plist_path.display()),
                 &format!("stdout_log={}", status.stdout_log.path.display()),
                 &format!(
@@ -786,6 +801,18 @@ async fn run_agmsg_doctor(
                     relevance,
                     &format!("label={}", status.label),
                     &format!("installed={}", status.installed),
+                    &format!(
+                        "args_match={}",
+                        format_optional_bool(status.arguments_match)
+                    ),
+                    &format!(
+                        "desired_thread={}",
+                        format_optional_str(status.desired_thread.as_deref())
+                    ),
+                    &format!(
+                        "active_thread={}",
+                        format_optional_str(status.active_thread.as_deref())
+                    ),
                     &format!("plist={}", status.plist_path.display()),
                     &format!(
                         "stdout_mtime={}",
@@ -817,6 +844,9 @@ async fn run_agmsg_doctor(
         } else {
             "potential"
         };
+        let thread_match = thread
+            .as_deref()
+            .map(|desired| consumer.thread.as_deref() == Some(desired));
         print_agmsg_doctor_row(&[
             "doctor",
             "consumer",
@@ -825,6 +855,9 @@ async fn run_agmsg_doctor(
             &format!("kind={}", consumer.kind),
             &format!("team={}", consumer.team.as_deref().unwrap_or("-")),
             &format!("name={}", consumer.name.as_deref().unwrap_or("-")),
+            &format!("thread={}", format_optional_str(consumer.thread.as_deref())),
+            &format!("desired_thread={}", format_optional_str(thread.as_deref())),
+            &format!("thread_match={}", format_optional_bool(thread_match)),
             &format!("command={}", consumer.command),
         ]);
     }
@@ -933,6 +966,7 @@ struct AgmsgConsumerProcess {
     kind: String,
     team: Option<String>,
     name: Option<String>,
+    thread: Option<String>,
     command: String,
 }
 
@@ -975,6 +1009,7 @@ fn parse_agmsg_consumer_process(line: &str) -> Option<AgmsgConsumerProcess> {
 
     let team = option_from_cli_tokens(&tokens, "--team");
     let mut name = option_from_cli_tokens(&tokens, "--name");
+    let thread = option_from_cli_tokens(&tokens, "--thread");
     if name.is_none() && kind == "agmsg-watch-sh" {
         name = tokens.last().map(|value| (*value).to_string());
     }
@@ -984,6 +1019,7 @@ fn parse_agmsg_consumer_process(line: &str) -> Option<AgmsgConsumerProcess> {
         kind: kind.to_string(),
         team,
         name,
+        thread,
         command: command.to_string(),
     })
 }
@@ -1031,6 +1067,18 @@ fn format_optional_u128(value: Option<u128>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "-",
+    }
+}
+
+fn format_optional_str(value: Option<&str>) -> &str {
+    value.unwrap_or("-")
 }
 
 pub(crate) async fn resolve_endpoint_and_thread(
@@ -2065,10 +2113,28 @@ mod tests {
         assert_eq!(consumers[0].kind, "codex-monitor-agmsg-watch");
         assert_eq!(consumers[0].team.as_deref(), Some("emeria"));
         assert_eq!(consumers[0].name.as_deref(), Some("steve"));
+        assert_eq!(consumers[0].thread.as_deref(), None);
         assert_eq!(consumers[1].name.as_deref(), Some("advisor"));
         assert_eq!(consumers[2].name.as_deref(), Some("reviewer"));
         assert_eq!(consumers[3].name.as_deref(), Some("monitor"));
         assert_eq!(consumers[4].kind, "agmsg-watch-sh");
         assert_eq!(consumers[4].name.as_deref(), Some("game-maker"));
+    }
+
+    #[test]
+    fn parses_agmsg_consumer_thread_from_ps_text() {
+        let text = r#"
+  52232 /Users/ysk411/.cargo/bin/cdxm agmsg watch --team emeria --name codex --thread 019ede87-2268-7951-a2ec-9b59b0074037 --cwd /Users/ysk411/dev/emeriasaga
+"#;
+
+        let consumers = parse_agmsg_consumer_processes(text);
+
+        assert_eq!(consumers.len(), 1);
+        assert_eq!(consumers[0].team.as_deref(), Some("emeria"));
+        assert_eq!(consumers[0].name.as_deref(), Some("codex"));
+        assert_eq!(
+            consumers[0].thread.as_deref(),
+            Some("019ede87-2268-7951-a2ec-9b59b0074037")
+        );
     }
 }
