@@ -34,7 +34,10 @@ From this repository, the equivalent local install is:
 
 ### Windows native PowerShell
 
-Windows is supported as a native PowerShell install, without Git Bash or WSL:
+Windows is supported with a native PowerShell installer (no WSL). The
+`cdxm`/`codex-monitor` binaries are native; the optional Codex shim runs the
+same bash shim used on macOS/Linux through Git Bash, so installing that shim
+requires Git Bash:
 
 ```powershell
 iwr https://raw.githubusercontent.com/lucianlamp/codex-monitor/main/install.ps1 -UseBasicParsing | iex
@@ -53,6 +56,7 @@ The Windows installer asks before each user-visible step:
 - install the Codex skill under
   `%USERPROFILE%\.codex\skills\codex-monitor`
 - optionally install a Codex CLI shim at `%USERPROFILE%\.agents\bin\codex.cmd`
+  (a thin launcher that runs the shared bash shim through Git Bash)
 - add `%USERPROFILE%\.codex-monitor\bin` and
   `%USERPROFILE%\.agents\bin` to the user PATH
 

@@ -17,7 +17,6 @@ $ErrorActionPreference = 'Stop'
 
 $BinDir = Join-Path $InstallRoot 'bin'
 $ShimTarget = Join-Path $AgentsBin 'codex.cmd'
-$ShimScript = Join-Path $BinDir 'codex-monitor-shim.ps1'
 $TempDir = $null
 
 function Confirm-CdxmStep {
@@ -119,244 +118,40 @@ function Get-CodexEntrypointKind {
     return 'custom-or-unknown'
 }
 
-function Write-CdxmWindowsShimScript {
-    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-    $script = @'
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$CodexArgs
-)
-
-$ErrorActionPreference = 'Stop'
-$env:CODEX_MONITOR_SHIM_WRAPPER = '1'
-
-function Resolve-RealCodex {
-    if ($env:CODEX_MONITOR_REAL_CODEX) {
-        return $env:CODEX_MONITOR_REAL_CODEX
-    }
-
-    $shimTarget = $env:CODEX_MONITOR_SHIM_TARGET
-    $commands = Get-Command codex -All -ErrorAction SilentlyContinue
-    foreach ($command in $commands) {
-        $source = $command.Source
-        if (-not $source) {
-            continue
-        }
-        $resolved = try { (Resolve-Path $source -ErrorAction Stop).Path } catch { $source }
-        $target = if ($shimTarget) { try { (Resolve-Path $shimTarget -ErrorAction Stop).Path } catch { $shimTarget } } else { '' }
-        if ($target -and ($resolved -ieq $target)) {
-            continue
-        }
-        if ($resolved -ieq $PSCommandPath) {
-            continue
-        }
-        return $resolved
-    }
-
-    throw 'codex-monitor shim: real codex not found on PATH'
-}
-
-function Get-ProjectFromArgs {
-    param([string[]]$Tokens)
-
-    $project = (Get-Location).Path
-    for ($i = 0; $i -lt $Tokens.Count; $i++) {
-        $arg = $Tokens[$i]
-        if (($arg -eq '--cd' -or $arg -eq '--cwd' -or $arg -eq '-C') -and ($i + 1 -lt $Tokens.Count)) {
-            $project = $Tokens[$i + 1]
-            $i++
-            continue
-        }
-        if ($arg.StartsWith('--cd=') -or $arg.StartsWith('--cwd=')) {
-            $project = $arg.Substring($arg.IndexOf('=') + 1)
-            continue
-        }
-    }
-    if (Test-Path $project -PathType Container) {
-        return (Resolve-Path $project).Path
-    }
-    return (Get-Location).Path
-}
-
-function Get-FirstNonOption {
-    param([string[]]$Tokens)
-
-    for ($i = 0; $i -lt $Tokens.Count; $i++) {
-        $arg = $Tokens[$i]
-        if (($arg -eq '--cd' -or $arg -eq '--cwd' -or $arg -eq '-C') -and ($i + 1 -lt $Tokens.Count)) {
-            $i++
-            continue
-        }
-        if ($arg.StartsWith('--cd=') -or $arg.StartsWith('--cwd=')) {
-            continue
-        }
-        if ($arg -in @('--help', '--version', '-h', '-V')) {
-            return $arg
-        }
-        if ($arg.StartsWith('-')) {
-            continue
-        }
-        return $arg
-    }
-    return ''
-}
-
-function Get-ProjectHash {
-    param([string]$Project)
-
-    $sha1 = [Security.Cryptography.SHA1]::Create()
-    try {
-        $bytes = [Text.Encoding]::UTF8.GetBytes($Project)
-        return -join ($sha1.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
-    } finally {
-        $sha1.Dispose()
-    }
-}
-
-function Test-PortOpen {
-    param([int]$Port)
-
-    $client = [Net.Sockets.TcpClient]::new()
-    try {
-        $async = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
-        if (-not $async.AsyncWaitHandle.WaitOne(250)) {
-            return $false
-        }
-        $client.EndConnect($async)
-        return $true
-    } catch {
-        return $false
-    } finally {
-        $client.Close()
-    }
-}
-
-function Ensure-AppServer {
-    param(
-        [string]$RealCodex,
-        [string]$Project
-    )
-
-    $runDir = if ($env:CODEX_MONITOR_SHIM_RUN_DIR) {
-        $env:CODEX_MONITOR_SHIM_RUN_DIR
-    } else {
-        Join-Path $env:LOCALAPPDATA 'codex-monitor\shim'
-    }
-    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
-
-    $hash = Get-ProjectHash $Project
-    $serverLog = Join-Path $runDir "codex-app-server.$hash.log"
-    $serverErr = Join-Path $runDir "codex-app-server.$hash.err.log"
-    $serverPid = Join-Path $runDir "codex-app-server.$hash.pid"
-    $portFile = Join-Path $runDir "codex-app-server.$hash.port"
-
-    $port = $null
-    if ((Test-Path $portFile) -and (Test-Path $serverPid)) {
-        $existingPort = Get-Content -Raw $portFile -ErrorAction SilentlyContinue
-        $existingPid = Get-Content -Raw $serverPid -ErrorAction SilentlyContinue
-        $existingPort = "$existingPort".Trim()
-        $existingPid = "$existingPid".Trim()
-        if ($existingPort -match '^\d+$' -and $existingPid -match '^\d+$') {
-            $process = Get-Process -Id ([int]$existingPid) -ErrorAction SilentlyContinue
-            if ($process -and (Test-PortOpen ([int]$existingPort))) {
-                $port = [int]$existingPort
-            }
-        }
-    }
-
-    if (-not $port) {
-        Set-Content -Path $serverLog -Value ''
-        Set-Content -Path $serverErr -Value ''
-        $process = Start-Process -FilePath $RealCodex `
-            -ArgumentList @('app-server', '--listen', 'ws://127.0.0.1:0') `
-            -RedirectStandardOutput $serverLog `
-            -RedirectStandardError $serverErr `
-            -WindowStyle Hidden `
-            -PassThru
-        Set-Content -Path $serverPid -Value $process.Id
-
-        $deadline = (Get-Date).AddSeconds(15)
-        while ((Get-Date) -lt $deadline) {
-            $log = "$(Get-Content -Raw $serverLog -ErrorAction SilentlyContinue)`n$(Get-Content -Raw $serverErr -ErrorAction SilentlyContinue)"
-            if ($log -match 'listening on:\s*ws://127\.0\.0\.1:(\d+)') {
-                $port = [int]$Matches[1]
-                break
-            }
-            Start-Sleep -Milliseconds 100
-        }
-
-        if (-not $port) {
-            throw "codex-monitor shim: app-server did not report a listening port; see $serverLog"
-        }
-        Set-Content -Path $portFile -Value $port
-    }
-
-    if (-not (Test-PortOpen $port)) {
-        throw "codex-monitor shim: app-server did not start on ws://127.0.0.1:$port"
-    }
-    return "ws://127.0.0.1:$port"
-}
-
-$realCodex = Resolve-RealCodex
-
-if ($env:CODEX_MONITOR_SHIM_DISABLE -eq '1') {
-    & $realCodex @CodexArgs
-    exit $LASTEXITCODE
-}
-
-$commandName = Get-FirstNonOption $CodexArgs
-if ($commandName -in @('app-server', 'exec', 'login', 'logout', 'mcp', 'completion', 'debug', 'apply', 'review', 'sandbox', 'help', '--help', '-h', 'version', '--version', '-V')) {
-    & $realCodex @CodexArgs
-    exit $LASTEXITCODE
-}
-
-$project = Get-ProjectFromArgs $CodexArgs
-$socketUrl = Ensure-AppServer $realCodex $project
-Set-Location $project
-
-if ($commandName -eq 'resume') {
-    $resumeArgs = New-Object System.Collections.Generic.List[string]
-    $removed = $false
-    foreach ($arg in $CodexArgs) {
-        if (-not $removed -and $arg -eq 'resume') {
-            $removed = $true
-            continue
-        }
-        [void]$resumeArgs.Add($arg)
-    }
-    & $realCodex resume --remote $socketUrl @resumeArgs
-    exit $LASTEXITCODE
-}
-
-& $realCodex --remote $socketUrl @CodexArgs
-exit $LASTEXITCODE
-'@
-    Set-Content -Path $ShimScript -Value $script -Encoding UTF8
-    Write-Host "Installed Codex monitor PowerShell shim to $ShimScript"
-}
-
 function Write-CdxmCodexCmd {
-    Write-CdxmWindowsShimScript
     if (Test-Path $ShimTarget) {
         $kind = Get-CodexEntrypointKind $ShimTarget
         Write-Host "$ShimTarget already exists: detected $kind; Leaving existing codex entrypoint untouched."
         return
     }
 
+    # The Windows codex.cmd is a thin launcher that runs the shared bash shim
+    # (skills/codex-monitor/scripts/codex-shim.sh) through Git Bash, so the
+    # routing logic stays identical to macOS/Linux instead of being a separate
+    # PowerShell reimplementation.
+    $shimSource = Join-Path $SkillDir 'scripts\codex-shim.sh'
+    if (-not (Test-Path $shimSource)) {
+        throw "codex shim script not found at $shimSource; install the codex-monitor skill before the shim."
+    }
+    $shimBashPath = '/' + $shimSource.Substring(0, 1).ToLower() + ($shimSource.Substring(2) -replace '\\', '/')
+
     New-Item -ItemType Directory -Force -Path $AgentsBin | Out-Null
     $cmd = @"
 @echo off
+rem codex-monitor shim (Windows) -- generated by codex-monitor install.ps1.
+rem Routes codex through Git Bash into the shared bash shim
+rem (skills/codex-monitor/scripts/codex-shim.sh) so behavior matches macOS/Linux.
+set "WINPTY_SPAWNED=1"
 set "CODEX_MONITOR_SHIM_WRAPPER=1"
 set "CODEX_MONITOR_SHIM_TARGET=%~f0"
-where pwsh >nul 2>nul
-if "%ERRORLEVEL%"=="0" (
-    pwsh -NoProfile -ExecutionPolicy Bypass -File "$ShimScript" %*
-) else (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ShimScript" %*
-)
+set "CDXM_BASH=%CDXM_GIT_BASH%"
+if "%CDXM_BASH%"=="" set "CDXM_BASH=%GIT_BASH%"
+if "%CDXM_BASH%"=="" set "CDXM_BASH=C:\Program Files\Git\bin\bash.exe"
+"%CDXM_BASH%" -l "$shimBashPath" %*
 "@
     Set-Content -Path $ShimTarget -Value $cmd -Encoding ASCII
     Write-Host "Installed Codex monitor shim to $ShimTarget"
+    Write-Host "  routes through Git Bash to $shimSource"
 }
 
 function Add-UserPathEntry {

@@ -4,27 +4,66 @@ fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-#[test]
-fn windows_installer_has_native_paths_and_never_overwrites_codex_cmd() {
-    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
-
-    assert!(installer.contains("$ShimTarget = Join-Path $AgentsBin 'codex.cmd'"));
-    assert!(installer.contains("Leaving existing codex entrypoint untouched"));
-    assert!(installer.contains("CODEX_MONITOR_SHIM_WRAPPER=1"));
-    assert!(installer.contains("codex-monitor-shim.ps1"));
-    assert!(installer.contains("[Environment]::SetEnvironmentVariable('Path'"));
-    assert!(installer.contains("MSVC Build Tools"));
+fn shared_shim() -> String {
+    fs::read_to_string(repo_root().join("skills/codex-monitor/scripts/codex-shim.sh")).unwrap()
 }
 
 #[test]
-fn windows_installer_embeds_app_server_remote_shim() {
+fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
 
-    assert!(installer.contains("app-server"));
-    assert!(installer.contains("--listen"));
-    assert!(installer.contains("ws://127.0.0.1:0"));
-    assert!(installer.contains("--remote"));
-    assert!(installer.contains("CODEX_MONITOR_REAL_CODEX"));
+    assert!(installer.contains("$ShimTarget = Join-Path $AgentsBin 'codex.cmd'"));
+    // The generated codex.cmd is a thin launcher that runs the shared bash
+    // shim through Git Bash (same logic as macOS/Linux), not a separate
+    // PowerShell reimplementation.
+    assert!(installer.contains("scripts\\codex-shim.sh"));
+    assert!(installer.contains("CDXM_BASH"));
+    assert!(installer.contains("-l \"$shimBashPath\""));
+    assert!(installer.contains("CODEX_MONITOR_SHIM_WRAPPER=1"));
+    // Still refuses to clobber an existing codex entrypoint.
+    assert!(installer.contains("Leaving existing codex entrypoint untouched"));
+    // Still documents the bundled-rusqlite build requirement and updates PATH.
+    assert!(installer.contains("MSVC Build Tools"));
+    assert!(installer.contains("[Environment]::SetEnvironmentVariable('Path'"));
+    // The PowerShell shim reimplementation is gone.
+    assert!(!installer.contains("codex-monitor-shim.ps1"));
+}
+
+#[test]
+fn shared_shim_starts_app_server_and_runs_codex_with_remote() {
+    let shim = shared_shim();
+
+    assert!(shim.contains("CODEX_MONITOR_SHIM_WRAPPER=1"));
+    assert!(shim.contains("Codex monitor shim"));
+    assert!(shim.contains("app-server --listen"));
+    assert!(shim.contains("ws://127.0.0.1:0"));
+    assert!(shim.contains("--remote"));
+    assert!(shim.contains("CODEX_MONITOR_REAL_CODEX"));
+    // codex prints "listening on: ws://..." to stderr, so the shim must merge
+    // stderr into the log it scans for the port.
+    assert!(shim.contains("2>&1"));
+}
+
+#[test]
+fn shared_shim_passes_through_non_interactive_codex_commands() {
+    let shim = shared_shim();
+
+    // These are forwarded straight to the real codex instead of starting an
+    // app-server.
+    for cmd in [
+        "app-server",
+        "exec",
+        "login",
+        "logout",
+        "mcp",
+        "--help",
+        "--version",
+    ] {
+        assert!(
+            shim.contains(cmd),
+            "shim passthrough list is missing `{cmd}`"
+        );
+    }
 }
 
 #[test]
@@ -35,46 +74,6 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("codex.cmd"));
     assert!(readme.contains("never overwrites"));
     assert!(readme.contains("MSVC Build Tools"));
-}
-
-#[test]
-fn windows_shim_arg_parser_avoids_reserved_args_automatic_variable() {
-    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
-
-    // `$Args` is a PowerShell automatic variable; binding it as a function
-    // parameter silently yields an empty array, which made every `codex <cmd>`
-    // miss the passthrough list and spawn an app-server instead of delegating
-    // to the real codex. The arg helpers must use a non-reserved parameter.
-    assert!(
-        !installer.contains("[string[]]$Args"),
-        "shim arg helpers must not bind the reserved $Args automatic variable"
-    );
-    assert!(installer.contains("function Get-FirstNonOption"));
-    assert!(installer.contains("function Get-ProjectFromArgs"));
-    assert!(installer.contains("[string[]]$Tokens"));
-}
-
-#[test]
-fn windows_shim_detects_app_server_port_from_stderr() {
-    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
-
-    // codex >= 0.130 prints "listening on: ws://..." to stderr, so the shim
-    // must read the app-server's stderr log (not just stdout) when detecting
-    // the listening port, or its managed path times out.
-    assert!(installer.contains("listening on:"));
-    assert!(
-        installer.contains("Get-Content -Raw $serverErr"),
-        "Ensure-AppServer must read the app-server stderr log to detect the listening port"
-    );
-}
-
-#[test]
-fn windows_codex_cmd_prefers_powershell_7() {
-    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
-
-    // The generated codex.cmd runs the shim under PowerShell 7 (`pwsh`) when
-    // available, falling back to Windows PowerShell (`powershell.exe`).
-    assert!(installer.contains("where pwsh"));
-    assert!(installer.contains("pwsh -NoProfile -ExecutionPolicy Bypass -File"));
-    assert!(installer.contains("powershell.exe -NoProfile -ExecutionPolicy Bypass -File"));
+    // The Windows shim now routes through Git Bash.
+    assert!(readme.contains("Git Bash"));
 }
