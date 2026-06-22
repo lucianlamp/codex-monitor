@@ -60,6 +60,9 @@ The Codex shim prompt defaults to no. If `codex.cmd` already exists, the
 installer never overwrites it; it reports the detected kind and leaves the
 existing entrypoint untouched.
 
+Because native `agmsg watch` reads SQLite through bundled `rusqlite`, building
+from source on Windows requires the Rust MSVC toolchain plus MSVC Build Tools.
+
 For a non-interactive install with the shim:
 
 ```powershell
@@ -364,16 +367,22 @@ be app-server-bound before `codex-monitor` can inject into them; for daily use,
 the standard entrypoint is a PATH-first `codex` shim as described above.
 The adapter only polls unread inbox rows where `read_at IS NULL`; previously
 read history is ignored even when the codex-monitor cursor state is empty.
-The SQLite adapter is enabled on macOS/Linux builds; Windows builds keep the
-CLI and WebSocket/stdio transports available and return a clear unsupported
-error for `agmsg watch`. On Windows, use the native PowerShell installer and
-Codex CLI shim for app-server-bound Codex sessions; run agmsg-backed monitoring
-from macOS/Linux until the native SQLite adapter is enabled there.
+The SQLite adapter is enabled on macOS, Linux, and native Windows builds. On
+Windows, use the native PowerShell installer and Codex CLI shim for
+app-server-bound Codex sessions; `agmsg watch` reads the same SQLite message DB
+through bundled `rusqlite`.
 
 Default agmsg DB:
 
 ```text
 $HOME/.agents/skills/agmsg/db/messages.db
+```
+
+On native Windows, the default resolves through `HOME` when present, otherwise
+`USERPROFILE`:
+
+```text
+%USERPROFILE%\.agents\skills\agmsg\db\messages.db
 ```
 
 Use the current working directory as the target thread selector:

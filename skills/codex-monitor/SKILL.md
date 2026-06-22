@@ -146,10 +146,12 @@ be agmsg's shim; the important property is that interactive CLI launches become
 app-server-bound so `cdxm targets` can discover the live endpoint without the
 user manually typing `--remote`.
 
-Windows builds currently support the `cdxm` CLI, WebSocket/stdio transports,
-and Codex CLI shim. The agmsg SQLite adapter still returns an explicit
-unsupported error on Windows; run agmsg-backed watch/doctor flows from
-macOS/Linux until the native SQLite adapter is enabled there.
+Windows builds support the `cdxm` CLI, WebSocket/stdio transports, Codex CLI
+shim, and the agmsg SQLite adapter. Use native PowerShell for installation and
+keep the Windows `codex.cmd` shim first on PATH when you want CLI sessions to be
+app-server-bound for `cdxm agmsg watch`. Native SQLite builds use bundled
+`rusqlite`; on Windows this requires the Rust MSVC toolchain plus MSVC Build
+Tools.
 
 2. Start agmsg monitor work with the read-only runtime snapshot:
 

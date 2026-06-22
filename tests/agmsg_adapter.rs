@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 use codex_monitor::sources::agmsg::{format_agmsg_event_for_turn, AgmsgInboxStats, AgmsgSource};
 
 fn create_fixture_db(path: &std::path::Path) {

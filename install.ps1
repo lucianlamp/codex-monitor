@@ -79,6 +79,7 @@ function Install-CdxmBinaries {
         throw "cargo is required to build codex-monitor from source. Install Rust/Cargo, then rerun this installer."
     }
 
+    Write-Host "Note: Windows native agmsg SQLite support uses bundled rusqlite and requires the Rust MSVC toolchain plus MSVC Build Tools."
     & cargo install --path $SourceDir --bins --force --root $InstallRoot
     if ($LASTEXITCODE -ne 0) {
         throw "cargo install failed with exit code $LASTEXITCODE"

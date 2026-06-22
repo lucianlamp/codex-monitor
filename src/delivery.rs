@@ -23,32 +23,23 @@ pub struct MonitorWatchOptions {
 }
 
 pub async fn run_agmsg_watch(options: AgmsgWatchOptions) -> anyhow::Result<i32> {
-    #[cfg(windows)]
-    {
-        let _ = options;
-        anyhow::bail!("agmsg SQLite adapter is not available on Windows builds");
-    }
-
-    #[cfg(not(windows))]
-    {
-        let db_path = options
-            .agmsg_db
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(crate::sources::agmsg::AgmsgSource::default_db_path);
-        let state_key = format!("agmsg:{}:{}", options.team, options.name);
-        let source = crate::sources::agmsg::AgmsgSource::new(db_path, options.team, options.name);
-        run_monitor_watch(MonitorWatchOptions {
-            endpoint: options.endpoint,
-            source_label: "agmsg".to_string(),
-            state_key,
-            source: Box::new(source),
-            thread: options.thread,
-            cwd: options.cwd,
-            mode: options.mode,
-            dry_run: options.dry_run,
-        })
-        .await
-    }
+    let db_path = options
+        .agmsg_db
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(crate::sources::agmsg::AgmsgSource::default_db_path);
+    let state_key = format!("agmsg:{}:{}", options.team, options.name);
+    let source = crate::sources::agmsg::AgmsgSource::new(db_path, options.team, options.name);
+    run_monitor_watch(MonitorWatchOptions {
+        endpoint: options.endpoint,
+        source_label: "agmsg".to_string(),
+        state_key,
+        source: Box::new(source),
+        thread: options.thread,
+        cwd: options.cwd,
+        mode: options.mode,
+        dry_run: options.dry_run,
+    })
+    .await
 }
 
 pub async fn run_monitor_watch(options: MonitorWatchOptions) -> anyhow::Result<i32> {

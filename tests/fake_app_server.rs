@@ -912,7 +912,6 @@ fn sha256_base64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(bytes))
 }
 
-#[cfg(not(windows))]
 fn write_agmsg_fixture_db(path: &Path, team: &str, name: &str) {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.execute_batch(
@@ -1187,7 +1186,6 @@ async fn send_resolves_loaded_thread_from_cwd_when_thread_is_omitted() {
     );
 }
 
-#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn agmsg_watch_dry_run_prints_delivery_plan_without_sending_turn() {
     let url = start_fake_server().await;
@@ -1231,7 +1229,6 @@ async fn agmsg_watch_dry_run_prints_delivery_plan_without_sending_turn() {
     assert!(stdout.contains("dry-run\tnote\tno state update, no app-server turn sent"));
 }
 
-#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn monitor_watch_agmsg_dry_run_uses_agmsg_adapter() {
     let url = start_fake_server().await;

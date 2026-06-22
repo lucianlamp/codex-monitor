@@ -13,6 +13,7 @@ fn windows_installer_has_native_paths_and_never_overwrites_codex_cmd() {
     assert!(installer.contains("CODEX_MONITOR_SHIM_WRAPPER=1"));
     assert!(installer.contains("codex-monitor-shim.ps1"));
     assert!(installer.contains("[Environment]::SetEnvironmentVariable('Path'"));
+    assert!(installer.contains("MSVC Build Tools"));
 }
 
 #[test]
@@ -33,4 +34,5 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("install.ps1"));
     assert!(readme.contains("codex.cmd"));
     assert!(readme.contains("never overwrites"));
+    assert!(readme.contains("MSVC Build Tools"));
 }
