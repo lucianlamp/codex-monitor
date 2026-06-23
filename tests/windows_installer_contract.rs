@@ -25,8 +25,11 @@ fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
     assert!(installer.contains("CDXM_BASH"));
     assert!(installer.contains("-l \"$shimBashPath\""));
     assert!(installer.contains("CODEX_MONITOR_SHIM_WRAPPER=1"));
-    // Still refuses to clobber an existing codex entrypoint.
+    // An explicit shim install takes over an existing entrypoint while keeping a
+    // timestamped backup, and still leaves it untouched when the user declines.
     assert!(installer.contains("Leaving existing codex entrypoint untouched"));
+    assert!(installer.contains("Backed up existing"));
+    assert!(installer.contains(".bak-$stamp"));
     // Still documents the bundled-rusqlite build requirement and updates PATH.
     assert!(installer.contains("MSVC Build Tools"));
     assert!(installer.contains("[Environment]::SetEnvironmentVariable('Path'"));
@@ -114,7 +117,7 @@ fn readme_documents_windows_native_install() {
 
     assert!(readme.contains("install.ps1"));
     assert!(readme.contains("codex.cmd"));
-    assert!(readme.contains("never overwrites"));
+    assert!(readme.contains("keeps a backup"));
     assert!(readme.contains("MSVC Build Tools"));
     // The Windows shim now routes through Git Bash.
     assert!(readme.contains("Git Bash"));

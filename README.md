@@ -23,8 +23,10 @@ The installer asks before each user-visible step:
 - add `$HOME/.codex-monitor/bin` and `$HOME/.agents/bin` to PATH in `~/.zshrc`
 
 The Codex shim prompt defaults to no. If `$HOME/.agents/bin/codex` already
-exists, the installer never overwrites it; it reports the detected kind and
-leaves the existing entrypoint untouched.
+exists, the installer leaves it untouched unless you explicitly request the
+shim (`--install-shim`); in that case it reports the detected kind, keeps a
+backup of the previous entrypoint (`codex.bak-<timestamp>`), and installs the
+codex-monitor shim.
 
 From this repository, the equivalent local install is:
 
@@ -61,8 +63,10 @@ The Windows installer asks before each user-visible step:
   `%USERPROFILE%\.agents\bin` to the user PATH
 
 The Codex shim prompt defaults to no. If `codex.cmd` already exists, the
-installer never overwrites it; it reports the detected kind and leaves the
-existing entrypoint untouched.
+installer leaves it untouched unless you explicitly request the shim
+(`-InstallShim`); in that case it reports the detected kind, keeps a backup of
+the previous entrypoint (`codex.cmd.bak-<timestamp>`), and installs the
+codex-monitor shim.
 
 Because native `agmsg watch` reads SQLite through bundled `rusqlite`, building
 from source on Windows requires the Rust MSVC toolchain plus MSVC Build Tools.
