@@ -149,7 +149,21 @@ fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
 
 #[cfg(windows)]
 fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
-    let command = "$ErrorActionPreference='SilentlyContinue'; Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }";
+    let command = r#"
+$ErrorActionPreference='SilentlyContinue'
+'__CDXM_PROCESSES__'
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | ForEach-Object {
+    "{0}`t{1}" -f $_.ProcessId, ($_.CommandLine -replace "[`r`n]+", " ")
+}
+'__CDXM_TCP__'
+if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+    Get-NetTCPConnection -State Listen | Where-Object {
+        $_.LocalAddress -eq '127.0.0.1' -or $_.LocalAddress -eq '::1'
+    } | ForEach-Object {
+        "{0}`t{1}`t{2}" -f $_.OwningProcess, $_.LocalAddress, $_.LocalPort
+    }
+}
+"#;
     let output = std::process::Command::new("powershell.exe")
         .args([
             "-NoLogo",
@@ -163,7 +177,9 @@ fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
         .output();
     match output {
         Ok(output) if output.status.success() => {
-            discover_endpoint_candidates_from_process_text(&String::from_utf8_lossy(&output.stdout))
+            discover_windows_endpoint_candidates_from_inventory_text(&String::from_utf8_lossy(
+                &output.stdout,
+            ))
         }
         _ => Vec::new(),
     }
@@ -188,6 +204,72 @@ pub fn discover_endpoint_candidates_from_process_text(text: &str) -> Vec<Endpoin
     candidates
 }
 
+fn discover_windows_endpoint_candidates_from_process_and_tcp_text(
+    process_text: &str,
+    tcp_text: &str,
+) -> Vec<EndpointCandidate> {
+    let mut candidates = discover_endpoint_candidates_from_process_text(process_text);
+    let mut seen = candidates
+        .iter()
+        .map(|candidate| endpoint_label(&candidate.endpoint))
+        .collect::<BTreeSet<_>>();
+    let tcp_rows = parse_windows_tcp_listen_rows(tcp_text);
+
+    for line in process_text.lines() {
+        let Some((pid, command_line)) = parse_windows_process_row(line) else {
+            continue;
+        };
+        if !is_codex_app_server_process(&command_line) {
+            continue;
+        }
+        let source = endpoint_source_from_process_line(&command_line).to_string();
+        for row in tcp_rows.iter().filter(|row| row.pid == pid) {
+            let Some(url) = loopback_ws_url_from_tcp_listen(&row.local_address, row.port) else {
+                continue;
+            };
+            push_candidate(
+                &mut candidates,
+                &mut seen,
+                Endpoint::Explicit(url),
+                source.clone(),
+            );
+        }
+    }
+
+    candidates
+}
+
+fn discover_windows_endpoint_candidates_from_inventory_text(text: &str) -> Vec<EndpointCandidate> {
+    let mut process_text = String::new();
+    let mut tcp_text = String::new();
+    let mut section = "";
+    for line in text.lines() {
+        match line.trim() {
+            "__CDXM_PROCESSES__" => {
+                section = "process";
+                continue;
+            }
+            "__CDXM_TCP__" => {
+                section = "tcp";
+                continue;
+            }
+            _ => {}
+        }
+        match section {
+            "process" => {
+                process_text.push_str(line);
+                process_text.push('\n');
+            }
+            "tcp" => {
+                tcp_text.push_str(line);
+                tcp_text.push('\n');
+            }
+            _ => {}
+        }
+    }
+    discover_windows_endpoint_candidates_from_process_and_tcp_text(&process_text, &tcp_text)
+}
+
 fn endpoints_from_process_line(line: &str) -> Vec<(String, Endpoint)> {
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     let mut endpoints = Vec::new();
@@ -208,16 +290,65 @@ fn endpoints_from_process_line(line: &str) -> Vec<(String, Endpoint)> {
         let Some(endpoint) = explicit_endpoint_from_url(value) else {
             continue;
         };
-        let source = if line.contains(" --remote ") || line.contains("--remote=") {
-            "codex-cli-remote"
-        } else if line.contains("codex-bridge") || line.contains("--app-server") {
-            "agmsg-codex-bridge"
-        } else {
-            "codex-app-server-process"
-        };
+        let source = endpoint_source_from_process_line(line);
         endpoints.push((source.to_string(), endpoint));
     }
     endpoints
+}
+
+fn endpoint_source_from_process_line(line: &str) -> &'static str {
+    if line.contains(" --remote ") || line.contains("--remote=") {
+        "codex-cli-remote"
+    } else if line.contains("codex-bridge") || line.contains("--app-server") {
+        "agmsg-codex-bridge"
+    } else {
+        "codex-app-server-process"
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct WindowsTcpListenRow {
+    pid: u32,
+    local_address: String,
+    port: u16,
+}
+
+fn parse_windows_process_row(line: &str) -> Option<(u32, String)> {
+    let (pid, command_line) = line.trim().split_once('\t')?;
+    Some((pid.trim().parse().ok()?, command_line.trim().to_string()))
+}
+
+fn parse_windows_tcp_listen_rows(text: &str) -> Vec<WindowsTcpListenRow> {
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.trim().split('\t');
+            let pid = parts.next()?.trim().parse().ok()?;
+            let local_address = parts.next()?.trim().to_string();
+            let port = parts.next()?.trim().parse().ok()?;
+            Some(WindowsTcpListenRow {
+                pid,
+                local_address,
+                port,
+            })
+        })
+        .collect()
+}
+
+fn is_codex_app_server_process(command_line: &str) -> bool {
+    let lower = command_line.to_ascii_lowercase();
+    lower.contains("codex") && lower.contains("app-server")
+}
+
+fn loopback_ws_url_from_tcp_listen(local_address: &str, port: u16) -> Option<String> {
+    if port == 0 {
+        return None;
+    }
+    let host = match local_address.trim() {
+        "127.0.0.1" | "localhost" => "127.0.0.1",
+        "::1" => "[::1]",
+        _ => return None,
+    };
+    Some(format!("ws://{host}:{port}"))
 }
 
 pub fn default_app_socket_path() -> std::path::PathBuf {
@@ -351,6 +482,35 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
         assert_eq!(
             parsed[4].endpoint,
             Endpoint::Explicit("ws://127.0.0.1:54015".to_string())
+        );
+    }
+
+    #[test]
+    fn discovers_windows_dynamic_app_server_listen_ports_by_pid() {
+        let process_text = r#"
+51896	"C:\Users\me\AppData\Local\OpenAI\Codex\bin\codex.exe" app-server --listen ws://127.0.0.1:0
+42544	"C:\Users\me\AppData\Local\OpenAI\Codex\bin\codex.exe" app-server --listen ws://127.0.0.1:0
+101428	"C:\Program Files\WindowsApps\OpenAI.Codex\codex.exe" app-server --analytics-default-enabled
+        "#;
+        let tcp_text = r#"
+51896	127.0.0.1	55212
+42544	127.0.0.1	63030
+101428	0.0.0.0	61234
+        "#;
+
+        let parsed =
+            discover_windows_endpoint_candidates_from_process_and_tcp_text(process_text, tcp_text);
+
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].source, "codex-app-server-process");
+        assert_eq!(
+            parsed[0].endpoint,
+            Endpoint::Explicit("ws://127.0.0.1:55212".to_string())
+        );
+        assert_eq!(parsed[1].source, "codex-app-server-process");
+        assert_eq!(
+            parsed[1].endpoint,
+            Endpoint::Explicit("ws://127.0.0.1:63030".to_string())
         );
     }
 
