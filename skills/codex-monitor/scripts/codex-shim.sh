@@ -14,6 +14,21 @@ set -euo pipefail
 # CODEX_MONITOR_SHIM_WRAPPER=1
 export CODEX_MONITOR_SHIM_WRAPPER=1
 
+# A `codex` found on PATH may itself be another wrapper shim (codex-monitor or
+# agmsg) rather than the real binary. Chaining shim into shim hides the real
+# app-server binding, so skip any candidate that carries a known shim marker.
+# Only the head is scanned, so a large real codex binary stays cheap to reject.
+is_codex_shim() {
+  case "$(head -c 2 "$1" 2>/dev/null || true)" in
+    '#!') ;;
+    *) return 1 ;;
+  esac
+  case "$(head -c 4096 "$1" 2>/dev/null || true)" in
+    *CODEX_MONITOR_SHIM_WRAPPER*|*AGMSG_CODEX_SHIM_WRAPPER*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 resolve_real_codex() {
   if [ -n "${CODEX_MONITOR_REAL_CODEX:-}" ]; then
     printf '%s\n' "$CODEX_MONITOR_REAL_CODEX"
@@ -35,7 +50,8 @@ resolve_real_codex() {
       candidate_dir="$(cd "$(dirname "$candidate")" 2>/dev/null && pwd || true)"
       [ -n "$candidate_dir" ] || continue
       candidate_path="$candidate_dir/$(basename "$candidate")"
-      if [ "$candidate_path" != "$self_path" ] && [ "$candidate_path" != "$shim_target" ]; then
+      if [ "$candidate_path" != "$self_path" ] && [ "$candidate_path" != "$shim_target" ] \
+        && ! is_codex_shim "$candidate_path"; then
         printf '%s\n' "$candidate_path"
         return 0
       fi

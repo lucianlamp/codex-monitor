@@ -34,7 +34,8 @@ Options:
   --skip-build      Do not run cargo install. Useful for installer tests.
   --help            Show this help.
 
-The installer never overwrites an existing ~/.agents/bin/codex.
+With --install-shim the installer backs up an existing ~/.agents/bin/codex
+before replacing it with the codex-monitor shim.
 EOF
 }
 
@@ -192,18 +193,31 @@ shim_kind() {
 
 write_codex_shim() {
   mkdir -p "$AGENTS_BIN"
-  if [ -e "$SHIM_TARGET" ]; then
-    local kind
-    kind="$(shim_kind "$SHIM_TARGET")"
-    echo "$SHIM_TARGET already exists: detected $kind; leaving existing codex entrypoint untouched."
-    return 0
-  fi
 
   local source_shim="$SOURCE_DIR/skills/codex-monitor/scripts/codex-shim.sh"
   if [ ! -f "$source_shim" ]; then
     echo "missing shim source: $source_shim" >&2
     exit 1
   fi
+
+  if [ -e "$SHIM_TARGET" ]; then
+    local kind
+    kind="$(shim_kind "$SHIM_TARGET")"
+    if [ "$kind" = "codex-monitor" ]; then
+      cp "$source_shim" "$SHIM_TARGET"
+      chmod +x "$SHIM_TARGET"
+      echo "Refreshed existing codex-monitor shim at $SHIM_TARGET"
+      return 0
+    fi
+    # write_codex_shim only runs when the shim install was explicitly requested,
+    # so take over a foreign entrypoint -- but keep a timestamped backup first.
+    local stamp backup
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup="$SHIM_TARGET.bak-$stamp"
+    cp "$SHIM_TARGET" "$backup"
+    echo "Backed up existing $kind codex entrypoint to $backup"
+  fi
+
   cp "$source_shim" "$SHIM_TARGET"
   chmod +x "$SHIM_TARGET"
   echo "Installed Codex monitor shim to $SHIM_TARGET"

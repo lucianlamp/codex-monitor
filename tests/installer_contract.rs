@@ -52,13 +52,13 @@ fn installer_installs_skill_and_optional_shim_without_building() {
 }
 
 #[test]
-fn installer_never_overwrites_existing_codex_entrypoint() {
+fn installer_backs_up_and_replaces_foreign_codex_entrypoint() {
     let home = tempfile::tempdir().unwrap();
     let agents_bin = home.path().join(".agents/bin");
     fs::create_dir_all(&agents_bin).unwrap();
     let shim = agents_bin.join("codex");
-    fs::write(&shim, "#!/usr/bin/env bash\nprintf 'existing\\n'\n").unwrap();
-    let before = fs::read_to_string(&shim).unwrap();
+    let original = "#!/usr/bin/env bash\nprintf 'existing\\n'\n";
+    fs::write(&shim, original).unwrap();
 
     let output = Command::new("bash")
         .arg(repo_root().join("install.sh"))
@@ -77,9 +77,19 @@ fn installer_never_overwrites_existing_codex_entrypoint() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(fs::read_to_string(&shim).unwrap(), before);
-    assert!(String::from_utf8_lossy(&output.stdout)
-        .contains("leaving existing codex entrypoint untouched"));
+
+    // An explicit --install-shim takes over the entrypoint with the codex-monitor
+    // shim, but keeps the previous entrypoint as a timestamped backup.
+    let shim_text = fs::read_to_string(&shim).unwrap();
+    assert!(shim_text.contains("CODEX_MONITOR_SHIM_WRAPPER=1"));
+
+    let backup = fs::read_dir(&agents_bin)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .find(|e| e.file_name().to_string_lossy().starts_with("codex.bak-"))
+        .expect("a codex.bak-* backup should exist");
+    assert_eq!(fs::read_to_string(backup.path()).unwrap(), original);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Backed up existing"));
 }
 
 #[test]
