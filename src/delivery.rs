@@ -46,7 +46,6 @@ pub async fn run_monitor_watch(options: MonitorWatchOptions) -> anyhow::Result<i
     let (endpoint, thread) =
         crate::cli::resolve_endpoint_and_thread(options.endpoint, options.thread, options.cwd)
             .await?;
-    let requires_loaded_thread = !matches!(endpoint, crate::target::Endpoint::Managed);
     let state_path = default_state_path()?;
     let store = crate::state::StateStore::new(state_path);
     let mut state = store.load().await?;
@@ -82,9 +81,7 @@ pub async fn run_monitor_watch(options: MonitorWatchOptions) -> anyhow::Result<i
     let transport = crate::transport::open_endpoint_transport(endpoint).await?;
     let mut client = crate::client::AppServerClient::new(transport);
     client.initialize().await?;
-    if requires_loaded_thread {
-        client.ensure_thread_loaded(&thread).await?;
-    }
+    client.ensure_thread_loaded(&thread).await?;
 
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

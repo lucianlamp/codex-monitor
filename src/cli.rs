@@ -462,14 +462,11 @@ async fn run_send_command(
     wait: bool,
 ) -> anyhow::Result<i32> {
     let (endpoint, thread) = resolve_endpoint_and_thread(endpoint, thread, cwd).await?;
-    let requires_loaded_thread = !matches!(endpoint, crate::target::Endpoint::Managed);
     let transport = open_endpoint_transport(endpoint).await?;
     let mut client = AppServerClient::new(transport);
     let operation = async {
         client.initialize().await?;
-        if requires_loaded_thread {
-            client.ensure_thread_loaded(&thread).await?;
-        }
+        client.ensure_thread_loaded(&thread).await?;
         match mode {
             SendMode::Start => {
                 if wait {
@@ -971,9 +968,24 @@ struct AgmsgConsumerProcess {
 }
 
 fn discover_agmsg_consumer_processes() -> Vec<AgmsgConsumerProcess> {
+    #[cfg(windows)]
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "$ErrorActionPreference='SilentlyContinue'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | ForEach-Object { \"{0} {1}\" -f $_.ProcessId, $_.CommandLine }",
+        ])
+        .output();
+
+    #[cfg(not(windows))]
     let output = std::process::Command::new("ps")
         .args(["-axo", "pid=,command="])
         .output();
+
     match output {
         Ok(output) if output.status.success() => {
             parse_agmsg_consumer_processes(&String::from_utf8_lossy(&output.stdout))
@@ -995,9 +1007,12 @@ fn parse_agmsg_consumer_process(line: &str) -> Option<AgmsgConsumerProcess> {
     let command = command.trim();
     let tokens = command.split_whitespace().collect::<Vec<_>>();
 
-    let kind = if tokens.windows(2).any(|window| window == ["agmsg", "watch"])
-        && command_invokes_codex_monitor(&tokens)
-    {
+    let is_agmsg_watch = tokens.windows(2).any(|window| window == ["agmsg", "watch"])
+        || tokens
+            .windows(3)
+            .any(|window| window == ["monitor", "watch", "agmsg"]);
+
+    let kind = if is_agmsg_watch && command_invokes_codex_monitor(&tokens) {
         "codex-monitor-agmsg-watch"
     } else if command.contains("codex-bridge") {
         "codex-bridge"
@@ -1026,10 +1041,15 @@ fn parse_agmsg_consumer_process(line: &str) -> Option<AgmsgConsumerProcess> {
 
 fn command_invokes_codex_monitor(tokens: &[&str]) -> bool {
     tokens.iter().any(|token| {
-        token.ends_with("/cdxm")
-            || *token == "cdxm"
-            || token.ends_with("/codex-monitor")
-            || *token == "codex-monitor"
+        let basename = token
+            .trim_matches('"')
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(token);
+        matches!(
+            basename,
+            "cdxm" | "cdxm.exe" | "codex-monitor" | "codex-monitor.exe"
+        )
     })
 }
 
@@ -1118,19 +1138,16 @@ pub(crate) async fn resolve_endpoint_and_thread(
             }
             match matches.as_slice() {
                 [(candidate, thread)] => Ok((candidate.endpoint.clone(), thread.clone())),
-                [] => match thread_for_cwd(crate::target::Endpoint::Managed, &cwd).await {
-                    Ok(thread) => Ok((crate::target::Endpoint::Managed, thread)),
-                    Err(error) => {
-                        let detail = if failures.is_empty() {
-                            error.to_string()
-                        } else {
-                            format!("{error}; live probe failures: {}", failures.join("; "))
-                        };
-                        anyhow::bail!(
-                            "could not auto-resolve a thread for cwd {cwd}; open the target thread, pass --thread, or pass --cwd explicitly ({detail})"
-                        )
-                    }
-                },
+                [] => {
+                    let detail = if failures.is_empty() {
+                        "no candidate reported a loaded thread".to_string()
+                    } else {
+                        format!("live probe failures: {}", failures.join("; "))
+                    };
+                    anyhow::bail!(
+                        "could not auto-resolve a loaded thread for cwd {cwd}; open the target thread in an app-server-bound Codex session, pass --endpoint, or pass --thread with a loaded endpoint ({detail})"
+                    )
+                }
                 many => {
                     let choices = many
                         .iter()
@@ -1151,7 +1168,13 @@ pub(crate) async fn resolve_endpoint_and_thread(
             }
         }
         crate::target::Endpoint::Managed => {
-            let thread = thread_for_cwd(crate::target::Endpoint::Managed, &cwd).await?;
+            let thread = loaded_thread_for_cwd(crate::target::Endpoint::Managed, &cwd)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "managed endpoint has no loaded thread for cwd {cwd}; launch Codex through a remote/app-server shim or pass a loaded --endpoint"
+                    )
+                })?;
             Ok((crate::target::Endpoint::Managed, thread))
         }
         live_endpoint => {
@@ -1241,14 +1264,17 @@ pub(crate) async fn resolve_endpoint_for_loaded_thread(
     thread: &str,
 ) -> anyhow::Result<crate::target::Endpoint> {
     if endpoint != crate::target::Endpoint::Auto {
-        return Ok(endpoint);
+        let loaded = endpoint_has_loaded_thread(endpoint.clone(), thread).await?;
+        if loaded {
+            return Ok(endpoint);
+        }
+        anyhow::bail!(
+            "endpoint {} does not have loaded thread {thread}; open the target thread in that endpoint first",
+            crate::target::endpoint_label(&endpoint)
+        );
     }
 
     let candidates = crate::target::discover_auto_endpoint_candidates();
-    if candidates.is_empty() {
-        return Ok(crate::target::Endpoint::Managed);
-    }
-
     let mut matches = Vec::new();
     let mut failures = Vec::new();
     for candidate in candidates {
@@ -1372,11 +1398,6 @@ async fn loaded_threads_for_cwd(
     let threads = operation?;
     close_result?;
     Ok(threads)
-}
-
-async fn thread_for_cwd(endpoint: crate::target::Endpoint, cwd: &str) -> anyhow::Result<String> {
-    let threads = threads_for_cwd(endpoint, cwd).await?;
-    crate::target::resolve_single_thread(&threads)
 }
 
 async fn threads_for_cwd(
@@ -2086,7 +2107,7 @@ mod tests {
         let threads = resolve_threads_for_cwd_from_candidates(
             candidates,
             "/tmp/project",
-            Duration::from_millis(50),
+            Duration::from_millis(250),
         )
         .await
         .unwrap();
@@ -2135,6 +2156,25 @@ mod tests {
         assert_eq!(
             consumers[0].thread.as_deref(),
             Some("019ede87-2268-7951-a2ec-9b59b0074037")
+        );
+    }
+
+    #[test]
+    fn parses_windows_monitor_watch_agmsg_consumer() {
+        let text = r#"
+  56536 "C:\Users\ytvar\.codex-monitor\bin\cdxm.exe" monitor watch agmsg --team cdxm --name codex1 --cwd C:/Users/ytvar/dev/codex-monitor --mode auto --thread 019ef1b8-4d96-70a1-babc-0bd63ef5bc41
+"#;
+
+        let consumers = parse_agmsg_consumer_processes(text);
+
+        assert_eq!(consumers.len(), 1);
+        assert_eq!(consumers[0].pid, 56536);
+        assert_eq!(consumers[0].kind, "codex-monitor-agmsg-watch");
+        assert_eq!(consumers[0].team.as_deref(), Some("cdxm"));
+        assert_eq!(consumers[0].name.as_deref(), Some("codex1"));
+        assert_eq!(
+            consumers[0].thread.as_deref(),
+            Some("019ef1b8-4d96-70a1-babc-0bd63ef5bc41")
         );
     }
 }

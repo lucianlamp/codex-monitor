@@ -83,6 +83,7 @@ if [ -x "$agmsg_scripts/whoami.sh" ]; then
   run "$agmsg_scripts/whoami.sh" "$project" codex
 fi
 if [ -x "$agmsg_scripts/delivery.sh" ]; then
+  run "$agmsg_scripts/delivery.sh" status codex "$project"
   run "$agmsg_scripts/delivery.sh" status
 fi
 

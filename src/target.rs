@@ -120,7 +120,13 @@ fn push_candidate(
 }
 
 fn explicit_endpoint_from_url(value: &str) -> Option<Endpoint> {
-    if value.starts_with("ws://") || value.starts_with("unix://") || value == "stdio://" {
+    if value.starts_with("ws://") {
+        let parsed = url::Url::parse(value).ok()?;
+        if parsed.port() == Some(0) {
+            return None;
+        }
+        Some(Endpoint::Explicit(value.to_string()))
+    } else if value.starts_with("unix://") || value == "stdio://" {
         Some(Endpoint::Explicit(value.to_string()))
     } else {
         None
@@ -141,7 +147,29 @@ fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
+    let command = "$ErrorActionPreference='SilentlyContinue'; Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }";
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            discover_endpoint_candidates_from_process_text(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
     Vec::new()
 }
@@ -293,9 +321,12 @@ mod tests {
 node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --app-server unix:///tmp/bridge.sock --thread t1
 /opt/homebrew/bin/codex app-server --listen unix:///tmp/server.sock
 /opt/homebrew/bin/codex app-server --listen unix://
+"C:\Users\me\AppData\Local\OpenAI\Codex\bin\codex.exe" --remote ws://127.0.0.1:54014
+"C:\Users\me\AppData\Local\OpenAI\Codex\bin\codex.exe" app-server --listen ws://127.0.0.1:54015
+"C:\Users\me\AppData\Local\OpenAI\Codex\bin\codex.exe" app-server --listen ws://127.0.0.1:0
         "#;
         let parsed = discover_endpoint_candidates_from_process_text(text);
-        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed.len(), 5);
         assert_eq!(parsed[0].source, "codex-cli-remote");
         assert_eq!(
             parsed[0].endpoint,
@@ -310,6 +341,16 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
         assert_eq!(
             parsed[2].endpoint,
             Endpoint::Explicit("unix:///tmp/server.sock".to_string())
+        );
+        assert_eq!(parsed[3].source, "codex-cli-remote");
+        assert_eq!(
+            parsed[3].endpoint,
+            Endpoint::Explicit("ws://127.0.0.1:54014".to_string())
+        );
+        assert_eq!(parsed[4].source, "codex-app-server-process");
+        assert_eq!(
+            parsed[4].endpoint,
+            Endpoint::Explicit("ws://127.0.0.1:54015".to_string())
         );
     }
 

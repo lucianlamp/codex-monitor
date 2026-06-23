@@ -100,6 +100,7 @@ skill_dir="$(cd "$script_dir/.." && pwd)"
 agmsg_dir="${AGMSG_SCRIPTS_DIR:-$HOME/.agents/skills/agmsg/scripts}"
 whoami_script="$agmsg_dir/whoami.sh"
 identities_script="$agmsg_dir/identities.sh"
+delivery_script="$agmsg_dir/delivery.sh"
 context_script="$script_dir/cdxm-context.sh"
 agmsg_run_dir="${AGMSG_RUN_DIR:-$HOME/.agents/skills/agmsg/run}"
 
@@ -109,6 +110,10 @@ if [ ! -x "$whoami_script" ]; then
 fi
 if [ ! -x "$identities_script" ]; then
   printf 'agmsg identities helper not found: %s\n' "$identities_script" >&2
+  exit 127
+fi
+if [ ! -x "$delivery_script" ]; then
+  printf 'agmsg delivery helper not found: %s\n' "$delivery_script" >&2
   exit 127
 fi
 
@@ -131,6 +136,19 @@ extract_tab_field() {
 stop_legacy_codex_bridge_consumers() {
   local consumers="$1"
   local line pid args pidfile stopped=0
+  stop_pid() {
+    local pid="$1"
+    case "$(uname -s 2>/dev/null || printf 'unknown')" in
+      MINGW*|MSYS*|CYGWIN*)
+        MSYS2_ARG_CONV_EXCL='*' taskkill.exe /PID "$pid" /T /F >/dev/null 2>&1 \
+          || powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+            -Command "Stop-Process -Id $pid -Force -ErrorAction Stop" >/dev/null 2>&1
+        ;;
+      *)
+        kill "$pid" 2>/dev/null
+        ;;
+    esac
+  }
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     case "$line" in
@@ -139,12 +157,12 @@ stop_legacy_codex_bridge_consumers() {
     esac
     pid="$(extract_tab_field "$line" pid)"
     [ -n "$pid" ] || continue
-    args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+    args="$(extract_tab_field "$line" command)"
     case "$args" in
       *codex-bridge.js*|*codex-bridge-launcher.sh*) ;;
       *) continue ;;
     esac
-    if kill "$pid" 2>/dev/null; then
+    if stop_pid "$pid"; then
       stopped=$((stopped + 1))
     fi
   done <<<"$consumers"
@@ -152,12 +170,34 @@ stop_legacy_codex_bridge_consumers() {
   pidfile="$agmsg_run_dir/codex-bridge.$team.$name.pid"
   if [ -f "$pidfile" ]; then
     pid="$(cat "$pidfile" 2>/dev/null || true)"
-    args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
-    case "$args" in
-      *codex-bridge.js*|*codex-bridge-launcher.sh*) rm -f "$pidfile" "${pidfile%.pid}.meta" ;;
-    esac
+    stop_pid "$pid" >/dev/null 2>&1 || true
+    rm -f "$pidfile" "${pidfile%.pid}.meta"
   fi
   printf '%s' "$stopped"
+}
+
+stop_windows_legacy_codex_bridge_consumers() {
+  case "$(uname -s 2>/dev/null || printf 'unknown')" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *) printf '0'; return 0 ;;
+  esac
+
+  TEAM="$team" NAME="$name" powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command '
+$team = $env:TEAM
+$name = $env:NAME
+$killed = 0
+Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.CommandLine -like "*codex-bridge.js*" -and
+    $_.CommandLine -like "*--team $team*" -and
+    $_.CommandLine -like "*--name $name*"
+  } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    $killed += 1
+  }
+[Console]::Write($killed)
+' 2>/dev/null || printf '0'
 }
 
 resolve_thread() {
@@ -187,6 +227,55 @@ resolve_team_for_name() {
   "$identities_script" "$project" codex \
     | awk -v n="$wanted_name" 'NF >= 2 && $2 == n { print $1 }' \
     | awk '!seen[$0]++'
+}
+
+codex_entrypoint_kind() {
+  local codex_first
+  codex_first="$(command -v codex 2>/dev/null || true)"
+  if [ -z "$codex_first" ] || [ ! -r "$codex_first" ]; then
+    printf 'missing'
+    return 0
+  fi
+  if grep -q 'AGMSG_CODEX_SHIM_WRAPPER\|agmsg monitor mode' "$codex_first" 2>/dev/null; then
+    printf 'agmsg'
+  elif grep -q 'CODEX_MONITOR_SHIM_WRAPPER\|Codex monitor shim' "$codex_first" 2>/dev/null; then
+    printf 'codex-monitor'
+  else
+    printf 'none-or-unknown'
+  fi
+}
+
+agmsg_delivery_mode() {
+  "$delivery_script" status codex "$project" 2>/dev/null \
+    | awk -F': ' '$1 == "mode" { print $2; exit }'
+}
+
+ensure_agmsg_monitor_delivery_mode() {
+  local shim_kind delivery_mode
+  shim_kind="$(codex_entrypoint_kind)"
+  [ "$shim_kind" = "agmsg" ] || return 0
+
+  delivery_mode="$(agmsg_delivery_mode || true)"
+  [ -n "$delivery_mode" ] || delivery_mode="unknown"
+
+  section "agmsg delivery mode"
+  printf 'codex_shim=agmsg\nmode=%s\n' "$delivery_mode"
+  if [ "$delivery_mode" = "monitor" ] || [ "$delivery_mode" = "both" ]; then
+    printf 'note=%s\n' 'legacy agmsg monitor mode is active; explicit codex-monitor apply will disable it after dry-run to avoid duplicate delivery.'
+  else
+    printf 'note=%s\n' 'legacy agmsg monitor mode is not active.'
+  fi
+}
+
+disable_legacy_agmsg_monitor_delivery() {
+  local delivery_mode
+  delivery_mode="$(agmsg_delivery_mode || true)"
+  case "$delivery_mode" in
+    monitor|both)
+      section "disable legacy agmsg monitor"
+      "$delivery_script" set off codex "$project"
+      ;;
+  esac
 }
 
 thread="$(resolve_thread)"
@@ -255,6 +344,8 @@ case "$team" in
     exit 2
     ;;
 esac
+
+ensure_agmsg_monitor_delivery_mode
 
 section "selection"
 printf 'cwd=%s\nteam=%s\nname=%s\nmode=%s\nthread=%s\n' "$project" "$team" "$name" "$mode" "${thread:-auto}"
@@ -328,7 +419,10 @@ section "dry run"
 
 if [ "$legacy_replace_pending" -eq 1 ]; then
   section "replace legacy"
+  disable_legacy_agmsg_monitor_delivery
   stopped="$(stop_legacy_codex_bridge_consumers "$legacy_target_consumer")"
+  stopped_current="$(stop_windows_legacy_codex_bridge_consumers)"
+  stopped=$((stopped + stopped_current))
   printf 'stopped legacy codex-bridge process(es): %s\n' "$stopped"
   sleep 0.3
 fi
@@ -339,11 +433,58 @@ if [ "$foreground" -eq 1 ]; then
 fi
 
 if [ "$apply" -eq 0 ]; then
-  printf '\nnext: %s agmsg launch-agent install' "$codex_monitor_bin"
-  printf ' %s' "${watch_args[@]}"
-  printf ' --force --load\n'
+  platform="$(uname -s 2>/dev/null || printf 'unknown')"
+  case "$platform" in
+    MINGW*|MSYS*|CYGWIN*)
+      printf '\nnext: %s monitor watch agmsg' "$codex_monitor_bin"
+      printf ' %s' "${watch_args[@]}"
+      printf '\n'
+      ;;
+    *)
+      printf '\nnext: %s agmsg launch-agent install' "$codex_monitor_bin"
+      printf ' %s' "${watch_args[@]}"
+      printf ' --force --load\n'
+      ;;
+  esac
   exit 0
 fi
+
+platform="$(uname -s 2>/dev/null || printf 'unknown')"
+case "$platform" in
+  MINGW*|MSYS*|CYGWIN*)
+    section "windows background watch"
+    local_appdata="${LOCALAPPDATA:-$HOME/AppData/Local}"
+    if command -v cygpath >/dev/null 2>&1; then
+      local_appdata="$(cygpath -u "$local_appdata" 2>/dev/null || printf '%s' "$local_appdata")"
+    fi
+    log_dir="$local_appdata/codex-monitor/logs"
+    mkdir -p "$log_dir"
+    safe_team="$(printf '%s' "$team" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
+    safe_name="$(printf '%s' "$name" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
+    stdout_log="$log_dir/agmsg-$safe_team-$safe_name.out.log"
+    stderr_log="$log_dir/agmsg-$safe_team-$safe_name.err.log"
+    nohup "$codex_monitor_bin" monitor watch agmsg "${watch_args[@]}" >"$stdout_log" 2>"$stderr_log" < /dev/null &
+    watch_pid="$!"
+    printf 'started_pid=%s\nstdout_log=%s\nstderr_log=%s\n' "$watch_pid" "$stdout_log" "$stderr_log"
+    sleep 0.5
+    if ! kill -0 "$watch_pid" 2>/dev/null; then
+      printf 'codex-monitor background watch exited early; stderr follows:\n' >&2
+      tail -50 "$stderr_log" >&2 || true
+      exit 1
+    fi
+    "$codex_monitor_bin" agmsg doctor "${watch_args[@]}" || true
+    exit 0
+    ;;
+  Darwin*) ;;
+  *)
+    section "background watch unavailable"
+    printf 'durable LaunchAgent install is only available on macOS, and this helper has no background installer for platform=%s.\n' "$platform" >&2
+    printf 'Run foreground watch manually: %s monitor watch agmsg' "$codex_monitor_bin"
+    printf ' %s' "${watch_args[@]}"
+    printf '\n'
+    exit 1
+    ;;
+esac
 
 section "launch-agent"
 status_output="$("$codex_monitor_bin" agmsg launch-agent status --team "$team" --name "$name" 2>&1 || true)"

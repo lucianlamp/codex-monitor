@@ -8,6 +8,11 @@ fn shared_shim() -> String {
     fs::read_to_string(repo_root().join("skills/codex-monitor/scripts/codex-shim.sh")).unwrap()
 }
 
+fn apply_helper() -> String {
+    fs::read_to_string(repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-apply.sh"))
+        .unwrap()
+}
+
 #[test]
 fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
@@ -64,6 +69,43 @@ fn shared_shim_passes_through_non_interactive_codex_commands() {
             "shim passthrough list is missing `{cmd}`"
         );
     }
+}
+
+#[test]
+fn agmsg_apply_uses_windows_background_watch_instead_of_launch_agent() {
+    let helper = apply_helper();
+
+    assert!(helper.contains("windows background watch"));
+    assert!(helper.contains("monitor watch agmsg"));
+    assert!(helper.contains("LOCALAPPDATA"));
+    assert!(helper.contains("nohup"));
+    assert!(helper.contains("agmsg launch-agent install"));
+}
+
+#[test]
+fn agmsg_apply_can_replace_legacy_codex_bridge_on_windows() {
+    let helper = apply_helper();
+
+    assert!(helper.contains("taskkill.exe"));
+    assert!(helper.contains("MSYS2_ARG_CONV_EXCL='*'"));
+    assert!(helper.contains("extract_tab_field \"$line\" command"));
+    assert!(helper.contains("Get-CimInstance Win32_Process"));
+    assert!(helper.contains("Stop-Process -Id $_.ProcessId"));
+}
+
+#[test]
+fn agmsg_apply_disables_legacy_agmsg_monitor_delivery() {
+    let helper = apply_helper();
+    let context =
+        fs::read_to_string(repo_root().join("skills/codex-monitor/scripts/cdxm-context.sh"))
+            .unwrap();
+
+    assert!(helper.contains("delivery.sh"));
+    assert!(helper.contains("status codex \"$project\""));
+    assert!(helper.contains("set off codex \"$project\""));
+    assert!(helper.contains("codex_shim=agmsg"));
+    assert!(helper.contains("disable legacy agmsg monitor"));
+    assert!(context.contains("status codex \"$project\""));
 }
 
 #[test]

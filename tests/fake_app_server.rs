@@ -1,241 +1,246 @@
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+#[cfg(not(windows))]
 use std::io::{Read, Write};
+#[cfg(not(windows))]
 use std::net::TcpListener as StdTcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::UnixListener;
+use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
+#[cfg(not(windows))]
 use tokio_tungstenite::{
-    accept_async, accept_hdr_async,
-    tungstenite::{
-        handshake::server::{Request as WsRequest, Response as WsResponse},
-        protocol::Message,
-    },
+    accept_hdr_async,
+    tungstenite::handshake::server::{Request as WsRequest, Response as WsResponse},
 };
 
 async fn start_fake_server() -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut ws = accept_async(stream).await.unwrap();
-        while let Some(message) = ws.next().await {
-            let Ok(message) = message else {
+        for _ in 0..2 {
+            let Ok((stream, _)) = listener.accept().await else {
                 break;
             };
-            let Message::Text(text) = message else {
-                continue;
-            };
-            let request: Value = serde_json::from_str(&text).unwrap();
-            match request["method"].as_str().unwrap() {
-                "initialize" => {
-                    ws.send(Message::Text(
-                        json!({ "id": request["id"], "result": {} })
+            let mut ws = accept_async(stream).await.unwrap();
+            while let Some(message) = ws.next().await {
+                let Ok(message) = message else {
+                    break;
+                };
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                match request["method"].as_str().unwrap() {
+                    "initialize" => {
+                        ws.send(Message::Text(
+                            json!({ "id": request["id"], "result": {} })
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "initialized" => {}
+                    "thread/list" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "data": [
+                                        {
+                                            "id": "thread-1",
+                                            "name": "One",
+                                            "preview": "First user message",
+                                            "cwd": "/tmp/project"
+                                        }
+                                    ],
+                                    "nextCursor": null
+                                }
+                            })
                             .to_string()
                             .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "initialized" => {}
-                "thread/list" => {
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "data": [
-                                    {
-                                        "id": "thread-1",
-                                        "name": "One",
-                                        "preview": "First user message",
-                                        "cwd": "/tmp/project"
-                                    }
-                                ],
-                                "nextCursor": null
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "thread/loaded/list" => {
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "data": ["thread-1", "thread-2"],
-                                "nextCursor": null
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "thread/read" => {
-                    assert_eq!(request["params"]["threadId"], "thread-1");
-                    assert_eq!(request["params"]["includeTurns"], true);
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "thread": {
-                                    "id": "thread-1",
-                                    "status": { "type": "idle" },
-                                    "turns": []
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "thread/loaded/list" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "data": ["thread-1", "thread-2"],
+                                    "nextCursor": null
                                 }
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "remoteControl/status/read" => {
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "status": "connected",
-                                "serverName": "fake-mac.local",
-                                "installationId": "install-1",
-                                "environmentId": "env-1"
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "remoteControl/enable" => {
-                    assert!(request["params"].is_null());
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "status": "connected",
-                                "serverName": "fake-mac.local",
-                                "installationId": "install-1",
-                                "environmentId": "env-1"
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "remoteControl/disable" => {
-                    assert!(request["params"].is_null());
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "status": "disabled",
-                                "serverName": "fake-mac.local",
-                                "installationId": "install-1",
-                                "environmentId": null
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "remoteControl/client/list" => {
-                    assert_eq!(request["params"]["environmentId"], "env-1");
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "data": [
-                                    {
-                                        "clientId": "client-1",
-                                        "displayName": "Phone",
-                                        "platform": "ios",
-                                        "lastSeenAt": 1781840000000i64
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "thread/read" => {
+                        assert_eq!(request["params"]["threadId"], "thread-1");
+                        assert_eq!(request["params"]["includeTurns"], true);
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "thread": {
+                                        "id": "thread-1",
+                                        "status": { "type": "idle" },
+                                        "turns": []
                                     }
-                                ],
-                                "nextCursor": null
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "remoteControl/status/read" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "status": "connected",
+                                    "serverName": "fake-mac.local",
+                                    "installationId": "install-1",
+                                    "environmentId": "env-1"
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "remoteControl/enable" => {
+                        assert!(request["params"].is_null());
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "status": "connected",
+                                    "serverName": "fake-mac.local",
+                                    "installationId": "install-1",
+                                    "environmentId": "env-1"
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "remoteControl/disable" => {
+                        assert!(request["params"].is_null());
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "status": "disabled",
+                                    "serverName": "fake-mac.local",
+                                    "installationId": "install-1",
+                                    "environmentId": null
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "remoteControl/client/list" => {
+                        assert_eq!(request["params"]["environmentId"], "env-1");
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "data": [
+                                        {
+                                            "clientId": "client-1",
+                                            "displayName": "Phone",
+                                            "platform": "ios",
+                                            "lastSeenAt": 1781840000000i64
+                                        }
+                                    ],
+                                    "nextCursor": null
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "remoteControl/pairing/start" => {
+                        assert_eq!(request["params"]["manualCode"], true);
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "environmentId": "env-1",
+                                    "pairingCode": "pair-123",
+                                    "manualPairingCode": "manual-456",
+                                    "expiresAt": 1781840300000i64
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "account/read" => {
+                        assert_eq!(request["params"]["refreshToken"], true);
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "account": {
+                                        "type": "chatgpt",
+                                        "email": "test@example.com",
+                                        "planType": "pro"
+                                    },
+                                    "requiresOpenaiAuth": false
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "turn/start" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": { "turn": { "id": "turn-1" } }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                        ws.send(Message::Text(
+                            json!({
+                                "method": "turn/completed",
+                                "params": {
+                                    "turn": { "id": "turn-1", "status": "completed" }
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    other => panic!("unexpected method {other}"),
                 }
-                "remoteControl/pairing/start" => {
-                    assert_eq!(request["params"]["manualCode"], true);
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "environmentId": "env-1",
-                                "pairingCode": "pair-123",
-                                "manualPairingCode": "manual-456",
-                                "expiresAt": 1781840300000i64
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "account/read" => {
-                    assert_eq!(request["params"]["refreshToken"], true);
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "account": {
-                                    "type": "chatgpt",
-                                    "email": "test@example.com",
-                                    "planType": "pro"
-                                },
-                                "requiresOpenaiAuth": false
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "turn/start" => {
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": { "turn": { "id": "turn-1" } }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                    ws.send(Message::Text(
-                        json!({
-                            "method": "turn/completed",
-                            "params": {
-                                "turn": { "id": "turn-1", "status": "completed" }
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                other => panic!("unexpected method {other}"),
             }
         }
     });
@@ -246,60 +251,64 @@ async fn start_fake_server_with_remote_client_list_error() -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut ws = accept_async(stream).await.unwrap();
-        while let Some(message) = ws.next().await {
-            let Ok(message) = message else {
+        for _ in 0..2 {
+            let Ok((stream, _)) = listener.accept().await else {
                 break;
             };
-            let Message::Text(text) = message else {
-                continue;
-            };
-            let request: Value = serde_json::from_str(&text).unwrap();
-            match request["method"].as_str().unwrap() {
-                "initialize" => {
-                    ws.send(Message::Text(
-                        json!({ "id": request["id"], "result": {} })
+            let mut ws = accept_async(stream).await.unwrap();
+            while let Some(message) = ws.next().await {
+                let Ok(message) = message else {
+                    break;
+                };
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                match request["method"].as_str().unwrap() {
+                    "initialize" => {
+                        ws.send(Message::Text(
+                            json!({ "id": request["id"], "result": {} })
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "initialized" => {}
+                    "remoteControl/status/read" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "status": "connected",
+                                    "serverName": "fake-mac.local",
+                                    "installationId": "install-1",
+                                    "environmentId": "env-1"
+                                }
+                            })
                             .to_string()
                             .into(),
-                    ))
-                    .await
-                    .unwrap();
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "remoteControl/client/list" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "error": {
+                                    "code": -32000,
+                                    "message": "client list unavailable"
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    other => panic!("unexpected method {other}"),
                 }
-                "initialized" => {}
-                "remoteControl/status/read" => {
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "status": "connected",
-                                "serverName": "fake-mac.local",
-                                "installationId": "install-1",
-                                "environmentId": "env-1"
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "remoteControl/client/list" => {
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "error": {
-                                "code": -32000,
-                                "message": "client list unavailable"
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                other => panic!("unexpected method {other}"),
             }
         }
     });
@@ -310,75 +319,79 @@ async fn start_fake_active_turn_server() -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut ws = accept_async(stream).await.unwrap();
-        while let Some(message) = ws.next().await {
-            let Ok(message) = message else {
+        for _ in 0..2 {
+            let Ok((stream, _)) = listener.accept().await else {
                 break;
             };
-            let Message::Text(text) = message else {
-                continue;
-            };
-            let request: Value = serde_json::from_str(&text).unwrap();
-            match request["method"].as_str().unwrap() {
-                "initialize" => {
-                    ws.send(Message::Text(
-                        json!({ "id": request["id"], "result": {} })
-                            .to_string()
-                            .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "initialized" => {}
-                "thread/loaded/list" => {
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": { "data": ["thread-1"], "nextCursor": null }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "thread/read" => {
-                    assert_eq!(request["params"]["threadId"], "thread-1");
-                    assert_eq!(request["params"]["includeTurns"], true);
-                    ws.send(Message::Text(
-                        json!({
-                            "id": request["id"],
-                            "result": {
-                                "thread": {
-                                    "id": "thread-1",
-                                    "status": { "type": "active", "activeFlags": [] },
-                                    "turns": [
-                                        { "id": "turn-active", "status": "inProgress", "items": [] }
-                                    ]
-                                }
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .unwrap();
-                }
-                "turn/steer" => {
-                    assert_eq!(request["params"]["threadId"], "thread-1");
-                    assert_eq!(request["params"]["expectedTurnId"], "turn-active");
-                    assert_eq!(request["params"]["input"][0]["text"], "hello");
-                    ws.send(Message::Text(
-                        json!({ "id": request["id"], "result": {} })
-                            .to_string()
-                            .into(),
-                    ))
-                    .await
-                    .unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            while let Some(message) = ws.next().await {
+                let Ok(message) = message else {
                     break;
+                };
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                match request["method"].as_str().unwrap() {
+                    "initialize" => {
+                        ws.send(Message::Text(
+                            json!({ "id": request["id"], "result": {} })
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "initialized" => {}
+                    "thread/loaded/list" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": { "data": ["thread-1"], "nextCursor": null }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "thread/read" => {
+                        assert_eq!(request["params"]["threadId"], "thread-1");
+                        assert_eq!(request["params"]["includeTurns"], true);
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "thread": {
+                                        "id": "thread-1",
+                                        "status": { "type": "active", "activeFlags": [] },
+                                        "turns": [
+                                            { "id": "turn-active", "status": "inProgress", "items": [] }
+                                        ]
+                                    }
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "turn/steer" => {
+                        assert_eq!(request["params"]["threadId"], "thread-1");
+                        assert_eq!(request["params"]["expectedTurnId"], "turn-active");
+                        assert_eq!(request["params"]["input"][0]["text"], "hello");
+                        ws.send(Message::Text(
+                            json!({ "id": request["id"], "result": {} })
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                        break;
+                    }
+                    other => panic!("unexpected method {other}"),
                 }
-                other => panic!("unexpected method {other}"),
             }
         }
     });
@@ -482,6 +495,76 @@ async fn start_fake_idle_ack_only_server() -> String {
                         .await
                         .unwrap();
                         break;
+                    }
+                    other => panic!("unexpected method {other}"),
+                }
+            }
+        }
+    });
+    format!("ws://{}", addr)
+}
+
+async fn start_fake_unloaded_thread_listing_server() -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        for _ in 0..2 {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut ws = accept_async(stream).await.unwrap();
+            while let Some(message) = ws.next().await {
+                let Ok(message) = message else {
+                    break;
+                };
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                match request["method"].as_str().unwrap() {
+                    "initialize" => {
+                        ws.send(Message::Text(
+                            json!({ "id": request["id"], "result": {} })
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "initialized" => {}
+                    "thread/loaded/list" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": { "data": [], "nextCursor": null }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "thread/list" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "data": [
+                                        {
+                                            "id": "thread-1",
+                                            "name": "Project thread",
+                                            "preview": "Existing but unloaded thread",
+                                            "cwd": "/tmp/project"
+                                        }
+                                    ],
+                                    "nextCursor": null
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
                     }
                     other => panic!("unexpected method {other}"),
                 }
@@ -603,6 +686,7 @@ fn write_test_auth_and_state(
     (auth_file, state_file)
 }
 
+#[cfg(not(windows))]
 fn write_device_key_module(path: &Path, missing: bool) {
     let script = if missing {
         r#"
@@ -632,6 +716,7 @@ exports.signDeviceKey = async function signDeviceKey(keyId, payload) {
     std::fs::write(path, script).unwrap();
 }
 
+#[cfg(not(windows))]
 fn start_fake_backend_clients_success() -> String {
     start_fake_backend_clients(
         "HTTP/1.1 200 OK",
@@ -658,6 +743,7 @@ fn start_fake_backend_clients_success() -> String {
     )
 }
 
+#[cfg(not(windows))]
 fn start_fake_backend_clients_failure() -> String {
     start_fake_backend_clients(
         "HTTP/1.1 401 Unauthorized",
@@ -667,6 +753,7 @@ fn start_fake_backend_clients_failure() -> String {
     )
 }
 
+#[cfg(not(windows))]
 fn start_fake_backend_clients(status_line: &'static str, response: Value) -> String {
     let listener = StdTcpListener::bind(("127.0.0.1", 0)).unwrap();
     let addr = listener.local_addr().unwrap();
@@ -681,6 +768,7 @@ fn start_fake_backend_clients(status_line: &'static str, response: Value) -> Str
     format!("http://{}", addr)
 }
 
+#[cfg(not(windows))]
 fn start_fake_pair_backend(
     expected_client_id: &'static str,
     expected_code: &'static str,
@@ -730,6 +818,7 @@ fn start_fake_pair_backend(
     format!("http://{}", addr)
 }
 
+#[cfg(not(windows))]
 fn start_fake_refresh_backend(
     expected_client_id: &'static str,
     expected_key_id: &'static str,
@@ -794,6 +883,7 @@ fn start_fake_refresh_backend(
 }
 
 #[allow(clippy::result_large_err)]
+#[cfg(not(windows))]
 async fn start_fake_remote_control_websocket(
     expected_client_id: &'static str,
     expected_key_id: &'static str,
@@ -861,6 +951,7 @@ async fn start_fake_remote_control_websocket(
     format!("ws://{addr}/remote-control-client")
 }
 
+#[cfg(not(windows))]
 fn read_http_request(stream: &mut std::net::TcpStream) -> (String, String) {
     let mut buffer = vec![0u8; 8192];
     let mut read = 0usize;
@@ -890,10 +981,12 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> (String, String) {
     }
 }
 
+#[cfg(not(windows))]
 fn write_http_json(stream: &mut std::net::TcpStream, value: &Value) {
     write_http_json_status(stream, "HTTP/1.1 200 OK", value);
 }
 
+#[cfg(not(windows))]
 fn write_http_json_status(stream: &mut std::net::TcpStream, status_line: &str, value: &Value) {
     let body = value.to_string();
     write!(
@@ -906,6 +999,7 @@ fn write_http_json_status(stream: &mut std::net::TcpStream, status_line: &str, v
     .unwrap();
 }
 
+#[cfg(not(windows))]
 fn sha256_base64url(bytes: &[u8]) -> String {
     use base64::Engine;
     use sha2::{Digest, Sha256};
@@ -1063,6 +1157,7 @@ async fn remote_pair_start_can_request_manual_pairing_code() {
     assert!(stdout.contains("manual-456"));
 }
 
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_claim_pairs_existing_enrolled_client_without_phone_input() {
     let app_server_url = start_fake_server().await;
@@ -1276,6 +1371,44 @@ async fn monitor_watch_agmsg_dry_run_uses_agmsg_adapter() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn monitor_watch_dry_run_rejects_unloaded_explicit_thread() {
+    let url = start_fake_unloaded_thread_listing_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("messages.db");
+    write_agmsg_fixture_db(&db_path, "dryrun-team", "target");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+        .env("HOME", dir.path())
+        .args([
+            "--endpoint",
+            &url,
+            "monitor",
+            "watch",
+            "agmsg",
+            "--team",
+            "dryrun-team",
+            "--name",
+            "target",
+            "--thread",
+            "thread-1",
+            "--agmsg-db",
+            db_path.to_str().unwrap(),
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not have loaded thread thread-1")
+            || stderr.contains("no auto endpoint has loaded thread thread-1"),
+        "stderr: {stderr}"
+    );
+}
+
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
 async fn remote_doctor_reports_all_surfaces() {
     let app_server_url = start_fake_server().await;
     let backend_url = start_fake_backend_clients_success();
@@ -1317,6 +1450,7 @@ async fn remote_doctor_reports_all_surfaces() {
     assert!(stdout.contains("doctor\tdevice-key\tok\tcli-test\tkey-test\tavailable"));
 }
 
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_doctor_keeps_going_when_device_key_missing() {
     let app_server_url = start_fake_server().await;
@@ -1355,6 +1489,7 @@ async fn remote_doctor_keeps_going_when_device_key_missing() {
     assert!(stdout.contains("device key not found"));
 }
 
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_connect_explains_missing_device_key_repair() {
     let app_server_url = start_fake_server().await;
@@ -1389,6 +1524,7 @@ async fn remote_connect_explains_missing_device_key_repair() {
     assert!(stderr.contains("device key not found"));
 }
 
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_doctor_reports_backend_failure_without_failing() {
     let app_server_url = start_fake_server().await;
@@ -1462,6 +1598,7 @@ async fn remote_doctor_reports_app_server_client_list_failure_without_failing() 
     assert!(stdout.contains("doctor\tlocal-enrollment\tok\tcli-test\tkey-test"));
 }
 
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_connect_completes_device_key_websocket_handshake() {
     let app_server_url = start_fake_server().await;
