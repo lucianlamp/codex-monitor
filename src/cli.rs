@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::{future::Future, path::PathBuf, time::Duration};
 
-const AUTO_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+const AUTO_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "codex-monitor")]
@@ -2114,6 +2114,14 @@ mod tests {
 
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].id, "thread-good");
+    }
+
+    #[test]
+    fn auto_probe_timeout_allows_real_app_thread_listing_latency() {
+        assert!(
+            AUTO_PROBE_TIMEOUT >= Duration::from_secs(5),
+            "cwd auto resolution calls thread/loaded/list and thread/list; Windows Codex app-server can exceed short 1500ms probes"
+        );
     }
 
     #[test]
