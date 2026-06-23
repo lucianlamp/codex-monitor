@@ -210,21 +210,28 @@ write_codex_shim() {
 }
 
 update_path_file() {
-  local path_entry="$1"
   local rc_file="$HOME/.zshrc"
   local marker_begin="# >>> codex-monitor PATH >>>"
   local marker_end="# <<< codex-monitor PATH <<<"
+  local tmp path_entry
   mkdir -p "$(dirname "$rc_file")"
   if [ -f "$rc_file" ] && grep -qF "$marker_begin" "$rc_file"; then
-    echo "PATH entry already managed in $rc_file"
-    return 0
+    tmp="$(mktemp)"
+    awk -v begin="$marker_begin" -v end="$marker_end" '
+      $0 == begin { skip = 1; next }
+      $0 == end { skip = 0; next }
+      !skip { print }
+    ' "$rc_file" > "$tmp"
+    mv "$tmp" "$rc_file"
   fi
   {
     printf '\n%s\n' "$marker_begin"
-    printf 'export PATH="%s:$PATH"\n' "$path_entry"
+    for path_entry in "$@"; do
+      printf 'export PATH="%s:$PATH"\n' "$path_entry"
+    done
     printf '%s\n' "$marker_end"
   } >> "$rc_file"
-  echo "Added $path_entry to PATH in $rc_file"
+  echo "Managed codex-monitor PATH entries in $rc_file"
 }
 
 SOURCE_DIR="$(resolve_source_dir)"
@@ -274,8 +281,7 @@ if [ -z "$UPDATE_PATH" ]; then
 fi
 
 if [ "$UPDATE_PATH" = "1" ]; then
-  update_path_file "$BIN_DIR"
-  update_path_file "$AGENTS_BIN"
+  update_path_file "$BIN_DIR" "$AGENTS_BIN"
 else
   echo "Skipped PATH update."
 fi

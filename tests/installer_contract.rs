@@ -39,6 +39,16 @@ fn installer_installs_skill_and_optional_shim_without_building() {
     assert!(shim_text.contains("Codex monitor shim"));
     assert!(shim_text.contains("app-server --listen"));
     assert!(fs::metadata(&shim).unwrap().permissions().mode() & 0o111 != 0);
+
+    let zshrc = fs::read_to_string(home.path().join(".zshrc")).unwrap();
+    assert!(zshrc.contains(&format!(
+        "export PATH=\"{}:$PATH\"",
+        home.path().join(".codex-monitor/bin").display()
+    )));
+    assert!(zshrc.contains(&format!(
+        "export PATH=\"{}:$PATH\"",
+        home.path().join(".agents/bin").display()
+    )));
 }
 
 #[test]
@@ -70,6 +80,54 @@ fn installer_never_overwrites_existing_codex_entrypoint() {
     assert_eq!(fs::read_to_string(&shim).unwrap(), before);
     assert!(String::from_utf8_lossy(&output.stdout)
         .contains("leaving existing codex entrypoint untouched"));
+}
+
+#[test]
+fn installer_rewrites_managed_path_block_with_agents_bin() {
+    let home = tempfile::tempdir().unwrap();
+    let zshrc = home.path().join(".zshrc");
+    fs::write(
+        &zshrc,
+        format!(
+            "before\n# >>> codex-monitor PATH >>>\nexport PATH=\"{}:$PATH\"\n# <<< codex-monitor PATH <<<\nafter\n",
+            home.path().join(".codex-monitor/bin").display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("install.sh"))
+        .arg("--source")
+        .arg(repo_root())
+        .arg("--yes")
+        .arg("--no-shim")
+        .arg("--skip-build")
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let zshrc_text = fs::read_to_string(&zshrc).unwrap();
+    assert!(zshrc_text.contains("before"));
+    assert!(zshrc_text.contains("after"));
+    assert_eq!(
+        zshrc_text.matches("# >>> codex-monitor PATH >>>").count(),
+        1
+    );
+    assert!(zshrc_text.contains(&format!(
+        "export PATH=\"{}:$PATH\"",
+        home.path().join(".codex-monitor/bin").display()
+    )));
+    assert!(zshrc_text.contains(&format!(
+        "export PATH=\"{}:$PATH\"",
+        home.path().join(".agents/bin").display()
+    )));
 }
 
 #[test]
@@ -106,7 +164,7 @@ esac
     .unwrap();
     fs::set_permissions(&fake_cdxm, fs::Permissions::from_mode(0o755)).unwrap();
 
-    for helper in ["whoami.sh", "identities.sh"] {
+    for helper in ["whoami.sh", "identities.sh", "delivery.sh"] {
         let path = fake_agmsg.join(helper);
         fs::write(&path, "#!/usr/bin/env bash\nexit 0\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
