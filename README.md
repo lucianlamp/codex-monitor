@@ -508,3 +508,7 @@ visible instead of hiding them behind `installed=true loaded=true`.
 - live-target `send`, its hidden `steer` command, and
   `monitor watch <adapter>` refuse to call `thread/resume`; the target thread
   must already be loaded in that app-server.
+
+## License
+
+Licensed under the [MIT License](LICENSE).
