@@ -1,5 +1,9 @@
 # codex-monitor
 
+<p align="center">
+  <img src="docs/assets/social-preview.png" alt="codex-monitor — Local-first monitor for Codex app-server events" width="100%">
+</p>
+
 `codex-monitor` is a local-first monitor for delivering external events into
 the Codex App / Codex app-server control plane.
 
