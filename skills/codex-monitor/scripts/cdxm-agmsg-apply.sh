@@ -261,21 +261,10 @@ ensure_agmsg_monitor_delivery_mode() {
   section "agmsg delivery mode"
   printf 'codex_shim=agmsg\nmode=%s\n' "$delivery_mode"
   if [ "$delivery_mode" = "monitor" ] || [ "$delivery_mode" = "both" ]; then
-    printf 'note=%s\n' 'legacy agmsg monitor mode is active; explicit codex-monitor apply will disable it after dry-run to avoid duplicate delivery.'
+    printf 'note=%s\n' 'legacy agmsg monitor mode is active; explicit codex-monitor apply will stop only the same team/name legacy bridge after dry-run.'
   else
     printf 'note=%s\n' 'legacy agmsg monitor mode is not active.'
   fi
-}
-
-disable_legacy_agmsg_monitor_delivery() {
-  local delivery_mode
-  delivery_mode="$(agmsg_delivery_mode || true)"
-  case "$delivery_mode" in
-    monitor|both)
-      section "disable legacy agmsg monitor"
-      "$delivery_script" set off codex "$project"
-      ;;
-  esac
 }
 
 thread="$(resolve_thread)"
@@ -419,7 +408,7 @@ section "dry run"
 
 if [ "$legacy_replace_pending" -eq 1 ]; then
   section "replace legacy"
-  disable_legacy_agmsg_monitor_delivery
+  printf 'note=%s\n' 'leaving project-wide legacy agmsg monitor mode unchanged; replacing only the same team/name legacy codex-bridge.'
   stopped="$(stop_legacy_codex_bridge_consumers "$legacy_target_consumer")"
   stopped_current="$(stop_windows_legacy_codex_bridge_consumers)"
   stopped=$((stopped + stopped_current))

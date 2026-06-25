@@ -97,7 +97,7 @@ fn agmsg_apply_can_replace_legacy_codex_bridge_on_windows() {
 }
 
 #[test]
-fn agmsg_apply_disables_legacy_agmsg_monitor_delivery() {
+fn agmsg_apply_does_not_disable_project_wide_legacy_agmsg_monitor_delivery() {
     let helper = apply_helper();
     let context =
         fs::read_to_string(repo_root().join("skills/codex-monitor/scripts/cdxm-context.sh"))
@@ -105,9 +105,11 @@ fn agmsg_apply_disables_legacy_agmsg_monitor_delivery() {
 
     assert!(helper.contains("delivery.sh"));
     assert!(helper.contains("status codex \"$project\""));
-    assert!(helper.contains("set off codex \"$project\""));
     assert!(helper.contains("codex_shim=agmsg"));
-    assert!(helper.contains("disable legacy agmsg monitor"));
+    assert!(!helper.contains("set off codex \"$project\""));
+    assert!(!helper.contains("disable legacy agmsg monitor"));
+    assert!(helper.contains("leaving project-wide legacy agmsg monitor mode unchanged"));
+    assert!(helper.contains("stop_legacy_codex_bridge_consumers \"$legacy_target_consumer\""));
     assert!(context.contains("status codex \"$project\""));
 }
 
