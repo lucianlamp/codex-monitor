@@ -80,13 +80,21 @@ function Install-CdxmPrebuilt {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
         return $false
     }
+    $checksum = $null
     try {
-        $expected = (Invoke-WebRequest -Uri "$url.sha256").Content.Trim().ToLower()
-        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-        if ($expected -ne $actual) {
-            throw "Checksum mismatch for $archive (expected $expected, got $actual)"
+        $resp = Invoke-WebRequest -Uri "$url.sha256" -ErrorAction SilentlyContinue
+        if ($resp -and $resp.StatusCode -eq 200) {
+            $checksum = $resp.Content.Trim().ToLower()
         }
-    } catch [System.Net.WebException] {
+    } catch {
+        $checksum = $null
+    }
+    if ($null -ne $checksum) {
+        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+        if ($checksum -ne $actual) {
+            throw "Checksum mismatch for $archive (expected $checksum, got $actual)"
+        }
+    } else {
         Write-Host "Warning: no published checksum for $archive; skipping verification."
     }
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
