@@ -238,14 +238,23 @@ fn installer_skip_build_still_installs_nothing() {
     let home = tempfile::tempdir().unwrap();
     let output = Command::new("bash")
         .arg(repo_root().join("install.sh"))
-        .arg("--source").arg(repo_root())
-        .arg("--yes").arg("--no-shim").arg("--skip-build")
+        .arg("--source")
+        .arg(repo_root())
+        .arg("--yes")
+        .arg("--no-shim")
+        .arg("--skip-build")
         .env("HOME", home.path())
-        .env("CDXM_INSTALL_RELEASE_BASE", "http://127.0.0.1:0/should-not-be-used")
-        .output().unwrap();
-    assert!(output.status.success(),
+        .env(
+            "CDXM_INSTALL_RELEASE_BASE",
+            "http://127.0.0.1:0/should-not-be-used",
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(!home.path().join(".codex-monitor/bin/cdxm").exists());
 }
