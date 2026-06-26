@@ -32,9 +32,9 @@ Options:
   --yes             Accept default yes prompts for binary, skill, and PATH.
   --install-shim    Install the Codex shim if ~/.agents/bin/codex is absent.
   --no-shim         Skip Codex shim installation.
-  --no-path         Do not update shell PATH files.
+  --no-path              Do not update shell PATH files.
   --source <path>        Use a local codex-monitor checkout instead of downloading.
-  --skip-build           Do not run cargo install. Useful for installer tests.
+  --skip-build           Install nothing: skip the prebuilt download and the cargo build. Useful for installer tests.
   --build-from-source    Skip prebuilt download; always build from source with cargo.
   --help                 Show this help.
 
