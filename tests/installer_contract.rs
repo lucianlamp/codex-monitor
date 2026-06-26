@@ -213,3 +213,39 @@ esac
     assert!(stdout.contains("dry-run ok"));
     assert!(!stdout.contains("already has an active target consumer"));
 }
+
+fn install_sh() -> String {
+    fs::read_to_string(repo_root().join("install.sh")).unwrap()
+}
+
+#[test]
+fn installer_has_prebuilt_download_path() {
+    let s = install_sh();
+    assert!(s.contains("releases/latest/download"));
+    assert!(s.contains("CDXM_INSTALL_RELEASE_BASE"));
+    // verifies a checksum before installing
+    assert!(s.contains("shasum") || s.contains("sha256sum"));
+    // maps macOS arches to the two darwin targets
+    assert!(s.contains("aarch64-apple-darwin"));
+    assert!(s.contains("x86_64-apple-darwin"));
+    // explicit source-build opt-in still exists
+    assert!(s.contains("--build-from-source"));
+}
+
+#[test]
+fn installer_skip_build_still_installs_nothing() {
+    // Re-uses the existing skill+shim contract: --skip-build must not download or build.
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new("bash")
+        .arg(repo_root().join("install.sh"))
+        .arg("--source").arg(repo_root())
+        .arg("--yes").arg("--no-shim").arg("--skip-build")
+        .env("HOME", home.path())
+        .env("CDXM_INSTALL_RELEASE_BASE", "http://127.0.0.1:0/should-not-be-used")
+        .output().unwrap();
+    assert!(output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr));
+    assert!(!home.path().join(".codex-monitor/bin/cdxm").exists());
+}

@@ -9,6 +9,9 @@ SKILL_DIR="${CDXM_SKILL_DIR:-$HOME/.codex/skills/codex-monitor}"
 AGENTS_BIN="${CDXM_AGENTS_BIN:-$HOME/.agents/bin}"
 SHIM_TARGET="$AGENTS_BIN/codex"
 
+RELEASE_BASE="${CDXM_INSTALL_RELEASE_BASE:-https://github.com/lucianlamp/codex-monitor/releases/latest/download}"
+BUILD_FROM_SOURCE=0
+
 ASSUME_YES=0
 INSTALL_SHIM=""
 UPDATE_PATH=""
@@ -30,12 +33,15 @@ Options:
   --install-shim    Install the Codex shim if ~/.agents/bin/codex is absent.
   --no-shim         Skip Codex shim installation.
   --no-path         Do not update shell PATH files.
-  --source <path>   Use a local codex-monitor checkout instead of downloading.
-  --skip-build      Do not run cargo install. Useful for installer tests.
-  --help            Show this help.
+  --source <path>        Use a local codex-monitor checkout instead of downloading.
+  --skip-build           Do not run cargo install. Useful for installer tests.
+  --build-from-source    Skip prebuilt download; always build from source with cargo.
+  --help                 Show this help.
 
 With --install-shim the installer backs up an existing ~/.agents/bin/codex
 before replacing it with the codex-monitor shim.
+On macOS, prebuilt binaries are downloaded by default. Use --build-from-source
+to build with cargo instead.
 EOF
 }
 
@@ -63,6 +69,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip-build)
       SKIP_BUILD=1
+      shift
+      ;;
+    --build-from-source)
+      BUILD_FROM_SOURCE=1
       shift
       ;;
     --help|-h)
@@ -147,11 +157,62 @@ resolve_source_dir() {
   download_source
 }
 
+prebuilt_target() {
+  # Only macOS has prebuilt archives; everything else returns empty.
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  case "$(uname -m)" in
+    arm64|aarch64) printf 'aarch64-apple-darwin\n' ;;
+    x86_64) printf 'x86_64-apple-darwin\n' ;;
+  esac
+}
+
+download_prebuilt() {
+  local target="$1"
+  local archive="codex-monitor-$target.tar.gz"
+  local url="$RELEASE_BASE/$archive"
+  local dl_dir expected actual
+  dl_dir="$(mktemp -d)"
+
+  echo "Downloading prebuilt binaries: $url"
+  if ! curl -fsSL "$url" -o "$dl_dir/$archive"; then
+    echo "Prebuilt download failed; falling back to source build." >&2
+    rm -rf "$dl_dir"
+    return 1
+  fi
+  if curl -fsSL "$url.sha256" -o "$dl_dir/$archive.sha256"; then
+    expected="$(tr -d '[:space:]' < "$dl_dir/$archive.sha256")"
+    actual="$(shasum -a 256 "$dl_dir/$archive" | awk '{print $1}')"
+    if [ "$expected" != "$actual" ]; then
+      echo "Checksum mismatch for $archive (expected $expected, got $actual)" >&2
+      rm -rf "$dl_dir"
+      exit 1
+    fi
+  else
+    echo "Warning: no published checksum for $archive; skipping verification." >&2
+  fi
+
+  mkdir -p "$BIN_DIR"
+  tar -xzf "$dl_dir/$archive" -C "$BIN_DIR" codex-monitor cdxm
+  chmod +x "$BIN_DIR/codex-monitor" "$BIN_DIR/cdxm"
+  xattr -d com.apple.quarantine "$BIN_DIR/codex-monitor" "$BIN_DIR/cdxm" 2>/dev/null || true
+  rm -rf "$dl_dir"
+  echo "Installed prebuilt cdxm to $BIN_DIR/cdxm"
+  return 0
+}
+
 install_binaries() {
   if [ "$SKIP_BUILD" -eq 1 ]; then
     mkdir -p "$BIN_DIR"
-    echo "Skipped cargo install (--skip-build)."
+    echo "Skipped binary install (--skip-build)."
     return 0
+  fi
+
+  if [ "$BUILD_FROM_SOURCE" -eq 0 ]; then
+    local target
+    target="$(prebuilt_target)"
+    if [ -n "$target" ] && download_prebuilt "$target"; then
+      return 0
+    fi
   fi
 
   if ! command -v cargo >/dev/null 2>&1; then
