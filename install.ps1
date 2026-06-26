@@ -6,6 +6,8 @@ param(
     [switch]$NoPath,
     [string]$Source,
     [switch]$SkipBuild,
+    [switch]$BuildFromSource,
+    [string]$ReleaseBase = $(if ($env:CDXM_INSTALL_RELEASE_BASE) { $env:CDXM_INSTALL_RELEASE_BASE } else { 'https://github.com/lucianlamp/codex-monitor/releases/latest/download' }),
     [string]$RepoUrl = $(if ($env:CDXM_INSTALL_REPO_URL) { $env:CDXM_INSTALL_REPO_URL } else { 'https://github.com/lucianlamp/codex-monitor' }),
     [string]$Ref = $(if ($env:CDXM_INSTALL_REF) { $env:CDXM_INSTALL_REF } else { 'main' }),
     [string]$InstallRoot = $(if ($env:CDXM_INSTALL_ROOT) { $env:CDXM_INSTALL_ROOT } else { Join-Path $HOME '.codex-monitor' }),
@@ -64,21 +66,53 @@ function Resolve-CdxmSource {
     return $sourceDir.FullName
 }
 
+function Install-CdxmPrebuilt {
+    $archive = 'codex-monitor-x86_64-pc-windows-msvc.zip'
+    $url = "$ReleaseBase/$archive"
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $zip = Join-Path $tmp $archive
+    Write-Host "Downloading prebuilt binaries: $url"
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $zip
+    } catch {
+        Write-Host "Prebuilt download failed; falling back to source build."
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        return $false
+    }
+    try {
+        $expected = (Invoke-WebRequest -Uri "$url.sha256").Content.Trim().ToLower()
+        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+        if ($expected -ne $actual) {
+            throw "Checksum mismatch for $archive (expected $expected, got $actual)"
+        }
+    } catch [System.Net.WebException] {
+        Write-Host "Warning: no published checksum for $archive; skipping verification."
+    }
+    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    Expand-Archive -Path $zip -DestinationPath $BinDir -Force
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    Write-Host "Installed prebuilt cdxm to $(Join-Path $BinDir 'cdxm.exe')"
+    return $true
+}
+
 function Install-CdxmBinaries {
     param([string]$SourceDir)
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     if ($SkipBuild) {
-        Write-Host "Skipped cargo install (-SkipBuild)."
+        Write-Host "Skipped binary install (-SkipBuild)."
         return
+    }
+    if (-not $BuildFromSource) {
+        if (Install-CdxmPrebuilt) { return }
     }
 
     $cargo = Get-Command cargo -ErrorAction SilentlyContinue
     if (-not $cargo) {
         throw "cargo is required to build codex-monitor from source. Install Rust/Cargo, then rerun this installer."
     }
-
-    Write-Host "Note: Windows native agmsg SQLite support uses bundled rusqlite and requires the Rust MSVC toolchain plus MSVC Build Tools."
+    Write-Host "Note: building from source requires the Rust MSVC toolchain plus MSVC Build Tools."
     & cargo install --path $SourceDir --bins --force --root $InstallRoot
     if ($LASTEXITCODE -ne 0) {
         throw "cargo install failed with exit code $LASTEXITCODE"
