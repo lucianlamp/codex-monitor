@@ -23,8 +23,8 @@ fn release_workflow_builds_all_three_targets() {
 #[test]
 fn release_workflow_packages_fixed_asset_names_with_checksums() {
     let wf = workflow();
-    assert!(wf.contains("codex-monitor-aarch64-apple-darwin.tar.gz"));
-    assert!(wf.contains("codex-monitor-x86_64-pc-windows-msvc.zip"));
+    assert!(wf.contains("codex-monitor-${{ matrix.target }}.tar.gz"));
+    assert!(wf.contains("codex-monitor-${{ matrix.target }}.zip"));
     assert!(wf.contains(".sha256"));
     // builds both binaries
     assert!(wf.contains("--bins") || (wf.contains("codex-monitor") && wf.contains("cdxm")));

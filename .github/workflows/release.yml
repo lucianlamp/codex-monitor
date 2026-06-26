@@ -54,11 +54,6 @@ jobs:
           Compress-Archive -Path (Join-Path $staging '*') -DestinationPath "$name.zip" -Force
           (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline "$name.zip.sha256"
       - name: Upload to release
-        # Asset names (fixed, no version): codex-monitor-aarch64-apple-darwin.tar.gz
-        # codex-monitor-x86_64-apple-darwin.tar.gz  codex-monitor-x86_64-pc-windows-msvc.zip
-        # Each accompanied by a .sha256 sidecar.
-        # softprops/action-gh-release ignores entries that do not exist, so listing
-        # both .tar.gz* and .zip* per job is safe — only the produced archive uploads.
         uses: softprops/action-gh-release@v2
         with:
           files: |
