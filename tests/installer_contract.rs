@@ -228,6 +228,8 @@ fn installer_has_prebuilt_download_path() {
     // maps macOS arches to the two darwin targets
     assert!(s.contains("aarch64-apple-darwin"));
     assert!(s.contains("x86_64-apple-darwin"));
+    assert!(s.contains("codex-monitor-$target.tar.gz"));
+    assert!(s.contains("Prebuilt archive did not contain the expected binaries"));
     // explicit source-build opt-in still exists
     assert!(s.contains("--build-from-source"));
 }

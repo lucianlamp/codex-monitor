@@ -204,6 +204,7 @@ pub fn discover_endpoint_candidates_from_process_text(text: &str) -> Vec<Endpoin
     candidates
 }
 
+#[cfg(any(windows, test))]
 fn discover_windows_endpoint_candidates_from_process_and_tcp_text(
     process_text: &str,
     tcp_text: &str,
@@ -239,6 +240,7 @@ fn discover_windows_endpoint_candidates_from_process_and_tcp_text(
     candidates
 }
 
+#[cfg(windows)]
 fn discover_windows_endpoint_candidates_from_inventory_text(text: &str) -> Vec<EndpointCandidate> {
     let mut process_text = String::new();
     let mut tcp_text = String::new();
@@ -306,6 +308,7 @@ fn endpoint_source_from_process_line(line: &str) -> &'static str {
     }
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct WindowsTcpListenRow {
     pid: u32,
@@ -313,11 +316,13 @@ struct WindowsTcpListenRow {
     port: u16,
 }
 
+#[cfg(any(windows, test))]
 fn parse_windows_process_row(line: &str) -> Option<(u32, String)> {
     let (pid, command_line) = line.trim().split_once('\t')?;
     Some((pid.trim().parse().ok()?, command_line.trim().to_string()))
 }
 
+#[cfg(any(windows, test))]
 fn parse_windows_tcp_listen_rows(text: &str) -> Vec<WindowsTcpListenRow> {
     text.lines()
         .filter_map(|line| {
@@ -334,11 +339,13 @@ fn parse_windows_tcp_listen_rows(text: &str) -> Vec<WindowsTcpListenRow> {
         .collect()
 }
 
+#[cfg(any(windows, test))]
 fn is_codex_app_server_process(command_line: &str) -> bool {
     let lower = command_line.to_ascii_lowercase();
     lower.contains("codex") && lower.contains("app-server")
 }
 
+#[cfg(any(windows, test))]
 fn loopback_ws_url_from_tcp_listen(local_address: &str, port: u16) -> Option<String> {
     if port == 0 {
         return None;

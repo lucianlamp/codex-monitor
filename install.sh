@@ -170,8 +170,9 @@ download_prebuilt() {
   local target="$1"
   local archive="codex-monitor-$target.tar.gz"
   local url="$RELEASE_BASE/$archive"
-  local dl_dir expected actual
+  local dl_dir extract_dir expected actual
   dl_dir="$(mktemp -d)"
+  extract_dir="$dl_dir/extract"
 
   echo "Downloading prebuilt binaries: $url"
   if ! curl -fsSL "$url" -o "$dl_dir/$archive"; then
@@ -196,9 +197,21 @@ download_prebuilt() {
     exit 1
   fi
 
+  mkdir -p "$extract_dir"
+  if ! tar -xzf "$dl_dir/$archive" -C "$extract_dir" codex-monitor cdxm; then
+    echo "Prebuilt archive did not contain the expected binaries; falling back to source build." >&2
+    rm -rf "$dl_dir"
+    return 1
+  fi
+  if [ ! -f "$extract_dir/codex-monitor" ] || [ ! -f "$extract_dir/cdxm" ]; then
+    echo "Prebuilt archive did not contain the expected binaries; falling back to source build." >&2
+    rm -rf "$dl_dir"
+    return 1
+  fi
+
   mkdir -p "$BIN_DIR"
-  tar -xzf "$dl_dir/$archive" -C "$BIN_DIR" codex-monitor cdxm
-  chmod +x "$BIN_DIR/codex-monitor" "$BIN_DIR/cdxm"
+  install -m 0755 "$extract_dir/codex-monitor" "$BIN_DIR/codex-monitor"
+  install -m 0755 "$extract_dir/cdxm" "$BIN_DIR/cdxm"
   xattr -d com.apple.quarantine "$BIN_DIR/codex-monitor" "$BIN_DIR/cdxm" 2>/dev/null || true
   rm -rf "$dl_dir"
   echo "Installed prebuilt cdxm to $BIN_DIR/cdxm"
