@@ -21,6 +21,13 @@ fn release_workflow_builds_all_three_targets() {
 }
 
 #[test]
+fn release_workflow_uses_available_intel_macos_runner() {
+    let wf = workflow();
+    assert!(wf.contains("macos-26-intel"));
+    assert!(!wf.contains("macos-13"));
+}
+
+#[test]
 fn release_workflow_packages_fixed_asset_names_with_checksums() {
     let wf = workflow();
     assert!(wf.contains("codex-monitor-${{ matrix.target }}.tar.gz"));

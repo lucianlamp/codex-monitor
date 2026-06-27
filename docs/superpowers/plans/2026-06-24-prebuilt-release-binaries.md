@@ -102,7 +102,7 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             archive: tar.gz
-          - os: macos-13
+          - os: macos-26-intel
             target: x86_64-apple-darwin
             archive: tar.gz
           - os: windows-latest
