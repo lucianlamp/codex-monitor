@@ -89,16 +89,43 @@ function Install-CdxmPrebuilt {
     } catch {
         $checksum = $null
     }
-    if ($null -ne $checksum) {
-        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-        if ($checksum -ne $actual) {
-            throw "Checksum mismatch for $archive (expected $checksum, got $actual)"
-        }
-    } else {
-        Write-Host "Warning: no published checksum for $archive; skipping verification."
+    # Integrity is mandatory: a missing checksum is fail-safe (fall back to a
+    # source build), never fail-open (install an unverified binary). Only a
+    # checksum that is present AND mismatches is treated as active tampering.
+    if ($null -eq $checksum) {
+        Write-Host "No published checksum for $archive; refusing to install an unverified binary. Falling back to source build."
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        return $false
     }
+    $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    if ($checksum -ne $actual) {
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        throw "Checksum mismatch for $archive (expected $checksum, got $actual)"
+    }
+
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-    Expand-Archive -Path $zip -DestinationPath $BinDir -Force
+    # Extract only the expected top-level binaries by exact entry name, so a
+    # tampered archive cannot drop extra files or traverse outside $BinDir
+    # (Zip Slip). Mirrors the bash shim's named-member tar extraction.
+    try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue } catch { }
+    $allowed = @('codex-monitor.exe', 'cdxm.exe')
+    $zipFile = [System.IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        foreach ($entry in $zipFile.Entries) {
+            if ($allowed -contains $entry.FullName) {
+                $dest = Join-Path $BinDir $entry.Name
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+            }
+        }
+    } finally {
+        $zipFile.Dispose()
+    }
+    if (-not (Test-Path (Join-Path $BinDir 'codex-monitor.exe')) -or
+        -not (Test-Path (Join-Path $BinDir 'cdxm.exe'))) {
+        Write-Host "Prebuilt archive did not contain the expected binaries; falling back to source build."
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        return $false
+    }
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     Write-Host "Installed prebuilt cdxm to $(Join-Path $BinDir 'cdxm.exe')"
     return $true

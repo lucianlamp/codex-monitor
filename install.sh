@@ -179,16 +179,21 @@ download_prebuilt() {
     rm -rf "$dl_dir"
     return 1
   fi
-  if curl -fsSL "$url.sha256" -o "$dl_dir/$archive.sha256"; then
-    expected="$(tr -d '[:space:]' < "$dl_dir/$archive.sha256")"
-    actual="$(shasum -a 256 "$dl_dir/$archive" | awk '{print $1}')"
-    if [ "$expected" != "$actual" ]; then
-      echo "Checksum mismatch for $archive (expected $expected, got $actual)" >&2
-      rm -rf "$dl_dir"
-      exit 1
-    fi
-  else
-    echo "Warning: no published checksum for $archive; skipping verification." >&2
+  # Integrity is mandatory: a missing checksum is fail-safe (fall back to a
+  # source build), never fail-open (install an unverified binary). Only a
+  # checksum that is present AND mismatches is treated as active tampering and
+  # aborts the whole installer.
+  if ! curl -fsSL "$url.sha256" -o "$dl_dir/$archive.sha256"; then
+    echo "No published checksum for $archive; refusing to install an unverified binary. Falling back to source build." >&2
+    rm -rf "$dl_dir"
+    return 1
+  fi
+  expected="$(tr -d '[:space:]' < "$dl_dir/$archive.sha256")"
+  actual="$(shasum -a 256 "$dl_dir/$archive" | awk '{print $1}')"
+  if [ "$expected" != "$actual" ]; then
+    echo "Checksum mismatch for $archive (expected $expected, got $actual)" >&2
+    rm -rf "$dl_dir"
+    exit 1
   fi
 
   mkdir -p "$BIN_DIR"
