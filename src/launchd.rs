@@ -522,6 +522,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn agmsg_launch_agent_plist_runs_cwd_watch_with_explicit_endpoint() {
         let config = AgmsgLaunchAgentConfig {
@@ -580,6 +581,7 @@ mod tests {
         assert!(parse_agmsg_launch_agent_label("com.example.other").is_none());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn parses_desired_and_active_launch_agent_arguments_for_thread_diff() {
         let config = AgmsgLaunchAgentConfig {

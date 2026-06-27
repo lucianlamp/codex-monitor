@@ -6,6 +6,8 @@ param(
     [switch]$NoPath,
     [string]$Source,
     [switch]$SkipBuild,
+    [switch]$BuildFromSource,
+    [string]$ReleaseBase = $(if ($env:CDXM_INSTALL_RELEASE_BASE) { $env:CDXM_INSTALL_RELEASE_BASE } else { 'https://github.com/lucianlamp/codex-monitor/releases/latest/download' }),
     [string]$RepoUrl = $(if ($env:CDXM_INSTALL_REPO_URL) { $env:CDXM_INSTALL_REPO_URL } else { 'https://github.com/lucianlamp/codex-monitor' }),
     [string]$Ref = $(if ($env:CDXM_INSTALL_REF) { $env:CDXM_INSTALL_REF } else { 'main' }),
     [string]$InstallRoot = $(if ($env:CDXM_INSTALL_ROOT) { $env:CDXM_INSTALL_ROOT } else { Join-Path $HOME '.codex-monitor' }),
@@ -64,21 +66,88 @@ function Resolve-CdxmSource {
     return $sourceDir.FullName
 }
 
+function Install-CdxmPrebuilt {
+    $archive = 'codex-monitor-x86_64-pc-windows-msvc.zip'
+    $url = "$ReleaseBase/$archive"
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $zip = Join-Path $tmp $archive
+    Write-Host "Downloading prebuilt binaries: $url"
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $zip
+    } catch {
+        Write-Host "Prebuilt download failed; falling back to source build."
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        return $false
+    }
+    $checksum = $null
+    try {
+        $resp = Invoke-WebRequest -Uri "$url.sha256" -ErrorAction SilentlyContinue
+        if ($resp -and $resp.StatusCode -eq 200) {
+            $checksum = $resp.Content.Trim().ToLower()
+        }
+    } catch {
+        $checksum = $null
+    }
+    # Integrity is mandatory: a missing checksum is fail-safe (fall back to a
+    # source build), never fail-open (install an unverified binary). Only a
+    # checksum that is present AND mismatches is treated as active tampering.
+    if ($null -eq $checksum) {
+        Write-Host "No published checksum for $archive; refusing to install an unverified binary. Falling back to source build."
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        return $false
+    }
+    $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    if ($checksum -ne $actual) {
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        throw "Checksum mismatch for $archive (expected $checksum, got $actual)"
+    }
+
+    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    # Extract only the expected top-level binaries by exact entry name, so a
+    # tampered archive cannot drop extra files or traverse outside $BinDir
+    # (Zip Slip). Mirrors the bash shim's named-member tar extraction.
+    try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue } catch { }
+    $allowed = @('codex-monitor.exe', 'cdxm.exe')
+    $zipFile = [System.IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        foreach ($entry in $zipFile.Entries) {
+            if ($allowed -contains $entry.FullName) {
+                $dest = Join-Path $BinDir $entry.Name
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+            }
+        }
+    } finally {
+        $zipFile.Dispose()
+    }
+    if (-not (Test-Path (Join-Path $BinDir 'codex-monitor.exe')) -or
+        -not (Test-Path (Join-Path $BinDir 'cdxm.exe'))) {
+        Write-Host "Prebuilt archive did not contain the expected binaries; falling back to source build."
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        return $false
+    }
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    Write-Host "Installed prebuilt cdxm to $(Join-Path $BinDir 'cdxm.exe')"
+    return $true
+}
+
 function Install-CdxmBinaries {
     param([string]$SourceDir)
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     if ($SkipBuild) {
-        Write-Host "Skipped cargo install (-SkipBuild)."
+        Write-Host "Skipped binary install (-SkipBuild)."
         return
+    }
+    if (-not $BuildFromSource) {
+        if (Install-CdxmPrebuilt) { return }
     }
 
     $cargo = Get-Command cargo -ErrorAction SilentlyContinue
     if (-not $cargo) {
         throw "cargo is required to build codex-monitor from source. Install Rust/Cargo, then rerun this installer."
     }
-
-    Write-Host "Note: Windows native agmsg SQLite support uses bundled rusqlite and requires the Rust MSVC toolchain plus MSVC Build Tools."
+    Write-Host "Note: building from source requires the Rust MSVC toolchain plus MSVC Build Tools."
     & cargo install --path $SourceDir --bins --force --root $InstallRoot
     if ($LASTEXITCODE -ne 0) {
         throw "cargo install failed with exit code $LASTEXITCODE"
