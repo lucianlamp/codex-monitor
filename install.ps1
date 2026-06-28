@@ -80,12 +80,15 @@ function Install-CdxmPrebuilt {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
         return $false
     }
+    # Fetch the checksum with the same -OutFile mechanism the archive download
+    # uses above: the in-memory ($resp.StatusCode -eq 200) form returns null
+    # through GitHub's releases/latest/download redirect on Windows, which would
+    # spuriously look like a missing sidecar and fail back to a source build.
     $checksum = $null
+    $shaFile = "$zip.sha256"
     try {
-        $resp = Invoke-WebRequest -Uri "$url.sha256" -ErrorAction SilentlyContinue
-        if ($resp -and $resp.StatusCode -eq 200) {
-            $checksum = $resp.Content.Trim().ToLower()
-        }
+        Invoke-WebRequest -Uri "$url.sha256" -OutFile $shaFile -UseBasicParsing
+        $checksum = (Get-Content -Raw $shaFile).Trim().ToLower()
     } catch {
         $checksum = $null
     }
