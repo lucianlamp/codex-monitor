@@ -4,7 +4,9 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio_tungstenite::{
-    connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
+    connect_async_with_config,
+    tungstenite::protocol::{Message, WebSocketConfig},
+    MaybeTlsStream, WebSocketStream,
 };
 
 use super::AppServerTransport;
@@ -19,7 +21,7 @@ pub struct WsTransport {
 impl WsTransport {
     pub async fn connect(url: &str) -> anyhow::Result<Self> {
         ensure_loopback_ws(url)?;
-        let (stream, _) = connect_async(url).await?;
+        let (stream, _) = connect_async_with_config(url, Some(websocket_config()), false).await?;
         Ok(Self {
             stream,
             child: None,
@@ -37,7 +39,7 @@ impl WsTransport {
             .kill_on_drop(true);
         let child = command.spawn()?;
         wait_ready(port).await?;
-        let (stream, _) = connect_async(&url).await?;
+        let (stream, _) = connect_async_with_config(&url, Some(websocket_config()), false).await?;
         Ok((
             url,
             Self {
@@ -126,6 +128,7 @@ async fn wait_ready(port: u16) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_tungstenite::accept_async;
 
     #[test]
     fn rejects_non_loopback_ws() {
@@ -133,4 +136,37 @@ mod tests {
         assert!(ensure_loopback_ws("ws://localhost:9").is_ok());
         assert!(ensure_loopback_ws("ws://192.168.1.2:9").is_err());
     }
+
+    #[tokio::test]
+    async fn receives_message_larger_than_default_limit() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let payload = "x".repeat(16 * 1024 * 1024 + 1);
+        let expected_payload = payload.clone();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            websocket
+                .send(Message::Text(
+                    serde_json::json!({ "payload": payload }).to_string().into(),
+                ))
+                .await
+                .unwrap();
+        });
+
+        let mut transport = WsTransport::connect(&format!("ws://{address}"))
+            .await
+            .unwrap();
+        let message = transport.recv().await.unwrap().unwrap();
+
+        assert_eq!(message["payload"].as_str(), Some(expected_payload.as_str()));
+        server.await.unwrap();
+    }
+}
+
+fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_frame_size(None)
+        .max_message_size(None)
 }
