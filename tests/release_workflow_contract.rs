@@ -40,10 +40,9 @@ fn release_workflow_packages_fixed_asset_names_with_checksums() {
 }
 
 #[test]
-fn windows_release_packages_app_bridge() {
+fn windows_release_packages_only_public_binaries() {
     let wf = workflow();
-    assert!(wf.contains("release/cdxm-codex-app-bridge.exe"));
-    assert!(
-        wf.contains("Copy-Item \"target/${{ matrix.target }}/release/cdxm-codex-app-bridge.exe\"")
-    );
+    assert!(wf.contains("release/codex-monitor.exe"));
+    assert!(wf.contains("release/cdxm.exe"));
+    assert!(!wf.contains("release/cdxm-codex-app-bridge.exe"));
 }

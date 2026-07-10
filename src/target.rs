@@ -80,28 +80,10 @@ pub fn resolve_app_endpoint(endpoint: Endpoint) -> anyhow::Result<Endpoint> {
     }
 }
 
-fn select_windows_app_endpoint(candidates: Vec<EndpointCandidate>) -> anyhow::Result<Endpoint> {
-    let app_endpoints = candidates
-        .into_iter()
-        .filter(|candidate| candidate.source == "codex-app-bridge")
-        .collect::<Vec<_>>();
-
-    match app_endpoints.as_slice() {
-        [] => bail!(
-            "no live Codex App bridge endpoint found on Windows; enable the app bridge, restart Codex App, and retry"
-        ),
-        [candidate] => Ok(candidate.endpoint.clone()),
-        many => {
-            let choices = many
-                .iter()
-                .map(|candidate| endpoint_label(&candidate.endpoint))
-                .collect::<Vec<_>>()
-                .join(", ");
-            bail!(
-                "multiple live Codex App bridge endpoints found on Windows; pass --endpoint explicitly: {choices}"
-            )
-        }
-    }
+fn select_windows_app_endpoint(_: Vec<EndpointCandidate>) -> anyhow::Result<Endpoint> {
+    bail!(
+        "Windows uses the native Codex App runtime; use `$codex-monitor` for foreground delivery or `$codex-monitor heartbeat` for persistent delivery"
+    )
 }
 
 pub fn discover_auto_endpoint_candidates() -> Vec<EndpointCandidate> {
@@ -174,7 +156,6 @@ fn push_candidate(
 
 fn source_priority(source: &str) -> u8 {
     match source {
-        "codex-app-bridge" => 2,
         "codex-app-server-process" => 1,
         _ => 0,
     }
@@ -261,24 +242,7 @@ if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
     match output {
         Ok(output) if output.status.success() => {
             let inventory = String::from_utf8_lossy(&output.stdout);
-            let live_bridge_pids = live_windows_app_bridge_pids_from_inventory_text(&inventory);
-            let mut candidates =
-                discover_windows_endpoint_candidates_from_inventory_text(&inventory);
-            let live_endpoints = candidates
-                .iter()
-                .map(|candidate| endpoint_label(&candidate.endpoint))
-                .collect::<BTreeSet<_>>();
-            if let Ok(dir) = crate::app_bridge::marker_dir() {
-                let mut seen = live_endpoints.clone();
-                for marker in crate::app_bridge::read_marker_candidates(
-                    &dir,
-                    &live_endpoints,
-                    &live_bridge_pids,
-                ) {
-                    push_candidate(&mut candidates, &mut seen, marker.endpoint, marker.source);
-                }
-            }
-            candidates
+            discover_windows_endpoint_candidates_from_inventory_text(&inventory)
         }
         _ => Vec::new(),
     }
@@ -369,35 +333,6 @@ fn discover_windows_endpoint_candidates_from_inventory_text(text: &str) -> Vec<E
         }
     }
     discover_windows_endpoint_candidates_from_process_and_tcp_text(&process_text, &tcp_text)
-}
-
-#[cfg(any(windows, test))]
-fn live_windows_app_bridge_pids_from_inventory_text(text: &str) -> BTreeSet<u32> {
-    let mut pids = BTreeSet::new();
-    let mut in_process_section = false;
-    for line in text.lines() {
-        match line.trim() {
-            "__CDXM_PROCESSES__" => {
-                in_process_section = true;
-                continue;
-            }
-            "__CDXM_TCP__" => break,
-            _ => {}
-        }
-        if !in_process_section {
-            continue;
-        }
-        let Some((pid, command_line)) = parse_windows_process_row(line) else {
-            continue;
-        };
-        if command_line
-            .to_ascii_lowercase()
-            .contains("cdxm-codex-app-bridge.exe")
-        {
-            pids.insert(pid);
-        }
-    }
-    pids
 }
 
 fn endpoints_from_process_line(line: &str) -> Vec<(String, Endpoint)> {
@@ -649,22 +584,6 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
         );
     }
 
-    #[test]
-    fn discovers_only_live_windows_app_bridge_process_ids() {
-        let inventory = concat!(
-            "__CDXM_PROCESSES__\n",
-            "32868\tC:\\Users\\me\\.codex-monitor\\bin\\cdxm-codex-app-bridge.exe -c features.code_mode_host=true app-server\n",
-            "42000\t\"C:\\Users\\me\\.codex-monitor\\runtime\\codex-app-real.exe\" app-server --listen ws://127.0.0.1:55123\n",
-            "__CDXM_TCP__\n",
-            "42000\t127.0.0.1\t55123\n",
-        );
-
-        assert_eq!(
-            live_windows_app_bridge_pids_from_inventory_text(inventory),
-            BTreeSet::from([32868])
-        );
-    }
-
     #[cfg(windows)]
     #[test]
     fn builds_windows_powershell_path_from_system_root() {
@@ -675,77 +594,12 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
     }
 
     #[test]
-    fn windows_app_target_selects_single_bridge_candidate() {
-        let candidates = vec![
-            EndpointCandidate {
-                endpoint: Endpoint::Explicit("ws://127.0.0.1:54014".into()),
-                source: "codex-app-server-process".into(),
-            },
-            EndpointCandidate {
-                endpoint: Endpoint::Explicit("ws://127.0.0.1:54015".into()),
-                source: "codex-app-bridge".into(),
-            },
-        ];
-
-        assert_eq!(
-            select_windows_app_endpoint(candidates).unwrap(),
-            Endpoint::Explicit("ws://127.0.0.1:54015".into())
-        );
-    }
-
-    #[test]
-    fn duplicate_endpoint_prefers_app_bridge_source() {
-        let endpoint = Endpoint::Explicit("ws://127.0.0.1:54015".into());
-        let mut candidates = Vec::new();
-        let mut seen = BTreeSet::new();
-
-        push_candidate(
-            &mut candidates,
-            &mut seen,
-            endpoint.clone(),
-            "codex-cli-remote".into(),
-        );
-        push_candidate(
-            &mut candidates,
-            &mut seen,
-            endpoint,
-            "codex-app-bridge".into(),
-        );
-
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].source, "codex-app-bridge");
-    }
-
-    #[test]
-    fn windows_app_target_rejects_ordinary_app_server_process() {
-        let error = select_windows_app_endpoint(vec![EndpointCandidate {
-            endpoint: Endpoint::Explicit("ws://127.0.0.1:54014".into()),
-            source: "codex-app-server-process".into(),
-        }])
-        .unwrap_err();
-
-        assert!(error
-            .to_string()
-            .contains("no live Codex App bridge endpoint found"));
-    }
-
-    #[test]
-    fn windows_app_target_rejects_ambiguous_bridges() {
-        let error = select_windows_app_endpoint(vec![
-            EndpointCandidate {
-                endpoint: Endpoint::Explicit("ws://127.0.0.1:54015".into()),
-                source: "codex-app-bridge".into(),
-            },
-            EndpointCandidate {
-                endpoint: Endpoint::Explicit("ws://127.0.0.1:54016".into()),
-                source: "codex-app-bridge".into(),
-            },
-        ])
-        .unwrap_err();
-
-        assert!(error
-            .to_string()
-            .contains("multiple live Codex App bridge endpoints found"));
+    fn windows_app_target_directs_delivery_to_native_shortcuts() {
+        let error = select_windows_app_endpoint(Vec::new()).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("native Codex App"));
+        assert!(message.contains("$codex-monitor"));
+        assert!(message.contains("heartbeat"));
     }
 
     #[test]

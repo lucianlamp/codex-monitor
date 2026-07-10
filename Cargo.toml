@@ -17,10 +17,6 @@ path = "src/main.rs"
 name = "cdxm"
 path = "src/bin/cdxm.rs"
 
-[[bin]]
-name = "cdxm-codex-app-bridge"
-path = "src/bin/cdxm-codex-app-bridge.rs"
-
 [dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1.89"
