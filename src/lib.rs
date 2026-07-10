@@ -13,6 +13,7 @@ pub mod sources;
 pub mod state;
 pub mod target;
 pub mod transport;
+pub mod update;
 
 pub async fn run_cli() -> anyhow::Result<i32> {
     cli::run_from_env().await

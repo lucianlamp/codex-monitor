@@ -28,6 +28,22 @@ fn package_exposes_codex_monitor_binaries() {
 }
 
 #[test]
+fn update_command_is_public_and_apply_worker_is_hidden() {
+    let primary = env!("CARGO_BIN_EXE_codex-monitor");
+    let help = Command::new(primary).arg("--help").output().unwrap();
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    assert!(help.contains("update"));
+    assert!(!help.contains("__apply-update"));
+
+    let update = Command::new(primary)
+        .args(["update", "--help"])
+        .output()
+        .unwrap();
+    assert!(update.status.success());
+}
+
+#[test]
 fn client_info_name_contract_is_fixed() {
     assert_eq!(codex_monitor::CLIENT_INFO_NAME, "codex-monitor");
     assert_eq!(codex_monitor::CLIENT_INFO_TITLE, "Codex Monitor");

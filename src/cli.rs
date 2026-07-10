@@ -35,6 +35,14 @@ pub enum TargetKind {
 #[derive(Debug, Clone, Subcommand)]
 pub enum Commands {
     Targets,
+    Update,
+    #[command(name = "__apply-update", hide = true)]
+    ApplyUpdate {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        parent_pid: u32,
+    },
     Threads {
         #[arg(long)]
         cwd: String,
@@ -312,6 +320,7 @@ struct RemoteDoctorOptions {
 }
 
 pub async fn run_from_env() -> anyhow::Result<i32> {
+    crate::update::report_previous_failure()?;
     let cli = Cli::parse();
     run(cli).await
 }
@@ -319,6 +328,11 @@ pub async fn run_from_env() -> anyhow::Result<i32> {
 pub async fn run(cli: Cli) -> anyhow::Result<i32> {
     let requested_endpoint = endpoint_from_options(cli.endpoint.clone(), cli.target);
     match cli.command {
+        Commands::Update => crate::update::run_update().await,
+        Commands::ApplyUpdate {
+            manifest,
+            parent_pid,
+        } => crate::update::run_apply(&manifest, parent_pid),
         Commands::Targets => {
             for candidate in crate::target::discover_auto_endpoint_candidates() {
                 println!(
