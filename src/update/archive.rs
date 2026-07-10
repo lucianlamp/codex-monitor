@@ -172,7 +172,7 @@ pub async fn download_latest_release(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Read, Write};
     use tempfile::TempDir;
     use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -272,5 +272,48 @@ mod tests {
                 "invalid archive case {index} was accepted"
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn latest_release_download_verifies_checksum_before_extracting() {
+        let archive = zip_bytes(&valid_entries());
+        let checksum = sha256_bytes(&archive);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_archive = archive.clone();
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 2048];
+                let read = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                let body = if request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .contains(".sha256")
+                {
+                    checksum.as_bytes()
+                } else {
+                    server_archive.as_slice()
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+
+        let destination = TempDir::new().unwrap();
+        let staged = download_latest_release(&format!("http://{address}"), destination.path())
+            .await
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(staged.len(), ManagedFile::RELEASE.len());
+        assert!(destination.path().join("codex-monitor.exe").is_file());
     }
 }

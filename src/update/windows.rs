@@ -2,6 +2,7 @@ use super::model::{sha256_file, InstallPaths, ManagedFile, StagedFile};
 use anyhow::{bail, Context};
 use serde::Deserialize;
 use std::{
+    collections::BTreeSet,
     ffi::OsStr,
     path::{Path, PathBuf},
     process::Command,
@@ -292,26 +293,20 @@ fn ensure_app_not_running_in(inventory: &WindowsInventory) -> anyhow::Result<()>
         .iter()
         .filter(|name| blocks_update_process(name))
         .cloned()
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     if !blockers.is_empty() {
         bail!(
             "fully quit Codex App before running codex-monitor update (active: {})",
-            blockers.join(", ")
+            blockers.into_iter().collect::<Vec<_>>().join(", ")
         );
     }
     Ok(())
 }
 
 fn blocks_update_process(name: &str) -> bool {
-    [
-        "cdxm-codex-app-bridge.exe",
-        "codex-app-real.exe",
-        "codex-code-mode-host.exe",
-        "codex-command-runner.exe",
-        "codex-windows-sandbox-setup.exe",
-    ]
-    .iter()
-    .any(|blocked| name.eq_ignore_ascii_case(blocked))
+    ["cdxm-codex-app-bridge.exe", "codex-app-real.exe"]
+        .iter()
+        .any(|blocked| name.eq_ignore_ascii_case(blocked))
 }
 
 fn read_bridge_backup(paths: &InstallPaths) -> anyhow::Result<AppBridgeBackup> {
@@ -397,6 +392,7 @@ mod tests {
         assert!(blocks_update_process("CDXM-CODEX-APP-BRIDGE.EXE"));
         assert!(blocks_update_process("codex-app-real.exe"));
         assert!(!blocks_update_process("Codex.exe"));
+        assert!(!blocks_update_process("codex-code-mode-host.exe"));
         assert!(!blocks_update_process("codex-monitor.exe"));
     }
 
