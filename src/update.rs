@@ -11,27 +11,6 @@ mod model;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{ffi::OsString, path::Path};
-
-    #[test]
-    fn helper_arguments_use_absolute_manifest_and_parent_pid() {
-        let args = helper_args(Path::new(r"C:\tmp\manifest.json"), 42);
-        assert_eq!(
-            args,
-            [
-                OsString::from("__apply-update"),
-                OsString::from("--manifest"),
-                OsString::from(r"C:\tmp\manifest.json"),
-                OsString::from("--parent-pid"),
-                OsString::from("42"),
-            ]
-        );
-    }
-}
-
 #[cfg(windows)]
 pub async fn run_update() -> Result<i32> {
     run_update_windows().await
@@ -276,5 +255,26 @@ impl Drop for StagingGuard {
         if !self.keep {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{ffi::OsString, path::Path};
+
+    #[test]
+    fn helper_arguments_use_absolute_manifest_and_parent_pid() {
+        let args = helper_args(Path::new(r"C:\tmp\manifest.json"), 42);
+        assert_eq!(
+            args,
+            [
+                OsString::from("__apply-update"),
+                OsString::from("--manifest"),
+                OsString::from(r"C:\tmp\manifest.json"),
+                OsString::from("--parent-pid"),
+                OsString::from("42"),
+            ]
+        );
     }
 }
