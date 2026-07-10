@@ -1,4 +1,4 @@
-use super::model::InstallPaths;
+use super::model::{sha256_file, InstallPaths, ManagedFile, UpdateManifest};
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -102,6 +102,13 @@ pub fn ensure_legacy_bridge_not_running() -> anyhow::Result<()> {
     let backup = read_owned_bridge_backup(&paths, &inventory)?;
     let action = plan_legacy_environment(&paths, &inventory, backup.as_ref())?;
     ensure_owned_migration_not_running(&paths, &inventory, &action)
+}
+
+pub fn defer_active_public_binaries(
+    manifest: &mut UpdateManifest,
+) -> anyhow::Result<Vec<ManagedFile>> {
+    let inventory = query_inventory()?;
+    defer_active_public_binaries_in(manifest, &inventory)
 }
 
 pub fn wait_for_process_exit(pid: u32) -> anyhow::Result<()> {
@@ -261,6 +268,55 @@ fn active_legacy_processes<'a>(
         .iter()
         .filter(|process| legacy.contains(&normalized_path_key(&process.path.to_string_lossy())))
         .collect()
+}
+
+fn defer_active_public_binaries_in(
+    manifest: &mut UpdateManifest,
+    inventory: &WindowsInventory,
+) -> anyhow::Result<Vec<ManagedFile>> {
+    let mut deferred = Vec::new();
+    for id in ManagedFile::ALL {
+        let destination = id.destination(&manifest.install_root);
+        let active = inventory
+            .processes
+            .iter()
+            .filter(|process| paths_equal(&process.path, &destination))
+            .collect::<Vec<_>>();
+        if active.is_empty() {
+            continue;
+        }
+        if !destination.is_file() {
+            bail!(
+                "active public binary is missing from its fixed path: {}",
+                destination.display()
+            );
+        }
+        let staged = manifest.staging_root.join(id.staged_name());
+        std::fs::copy(&destination, &staged).with_context(|| {
+            format!(
+                "failed to preserve active public binary {}",
+                destination.display()
+            )
+        })?;
+        let preserved_hash = sha256_file(&staged)?;
+        let entry = manifest
+            .files
+            .iter_mut()
+            .find(|file| file.id == id)
+            .with_context(|| format!("update manifest entry is missing: {id:?}"))?;
+        entry.sha256 = Some(preserved_hash);
+        let details = active
+            .iter()
+            .map(|process| format!("PID {}", process.pid))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "codex-monitor update deferred active public binary {} ({details})",
+            destination.display()
+        );
+        deferred.push(id);
+    }
+    Ok(deferred)
 }
 
 fn ensure_owned_migration_not_running(
@@ -723,6 +779,66 @@ mod tests {
 
         assert!(!legacy[0].exists());
         assert!(legacy[1..].iter().all(|path| path.exists()));
+    }
+
+    #[test]
+    fn update_preserves_only_active_public_binary_in_staging() {
+        use crate::update::model::{sha256_bytes, StagedFile, MANIFEST_VERSION};
+
+        let temp = TempDir::new().unwrap();
+        let install_root = temp.path().join("install");
+        let staging_root = install_root.join(".update-staging-test");
+        std::fs::create_dir_all(install_root.join("bin")).unwrap();
+        std::fs::create_dir_all(&staging_root).unwrap();
+        let installed_monitor = ManagedFile::CodexMonitor.destination(&install_root);
+        let installed_cdxm = ManagedFile::Cdxm.destination(&install_root);
+        std::fs::write(&installed_monitor, b"old monitor").unwrap();
+        std::fs::write(&installed_cdxm, b"old cdxm").unwrap();
+        std::fs::write(staging_root.join("codex-monitor.exe"), b"new monitor").unwrap();
+        std::fs::write(staging_root.join("cdxm.exe"), b"new cdxm").unwrap();
+        let mut manifest = UpdateManifest {
+            version: MANIFEST_VERSION,
+            install_root: install_root.clone(),
+            staging_root: staging_root.clone(),
+            files: vec![
+                StagedFile {
+                    id: ManagedFile::CodexMonitor,
+                    sha256: Some(sha256_bytes(b"new monitor")),
+                },
+                StagedFile {
+                    id: ManagedFile::Cdxm,
+                    sha256: Some(sha256_bytes(b"new cdxm")),
+                },
+            ],
+        };
+        let mut inventory = fixture_inventory(Some(PathBuf::from(r"C:\Native\codex.exe")));
+        inventory.processes.push(LegacyProcess {
+            pid: 42,
+            path: installed_cdxm,
+        });
+
+        let deferred = defer_active_public_binaries_in(&mut manifest, &inventory).unwrap();
+
+        assert_eq!(deferred, [ManagedFile::Cdxm]);
+        assert_eq!(
+            std::fs::read(staging_root.join("codex-monitor.exe")).unwrap(),
+            b"new monitor"
+        );
+        assert_eq!(
+            std::fs::read(staging_root.join("cdxm.exe")).unwrap(),
+            b"old cdxm"
+        );
+        let old_cdxm_hash = sha256_bytes(b"old cdxm");
+        assert_eq!(
+            manifest
+                .files
+                .iter()
+                .find(|file| file.id == ManagedFile::Cdxm)
+                .unwrap()
+                .sha256
+                .as_deref(),
+            Some(old_cdxm_hash.as_str())
+        );
     }
 
     #[test]

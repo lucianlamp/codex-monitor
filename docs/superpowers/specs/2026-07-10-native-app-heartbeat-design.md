@@ -153,6 +153,11 @@ legacy runtime files do not block installation of the public binaries: their
 cleanup is deferred until a later update. This file cleanup does not authorize
 any environment change or process termination.
 
+Public binary replacement is also per-file. If an exact installed public
+binary path is active, installation or update preserves that file and updates
+the other inactive public binary. A later run replaces the deferred file after
+its consumer exits; no public process is stopped by the product.
+
 If ownership cannot be proven, environment values are preserved and the
 operation reports an actionable warning instead of guessing. A native explicit
 `CODEX_CLI_PATH` is therefore stable across future updates.

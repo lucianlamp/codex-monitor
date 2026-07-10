@@ -205,7 +205,9 @@ otherwise unowned, the updater installs the public binaries and defers cleanup
 of active orphaned legacy runtime files until a later update. It removes only
 inactive fixed legacy paths. If an owned legacy bridge is still active, the
 updater asks the user to quit App because restoring that owned environment is
-the migration itself. It never stops a process. The updater does not manage
+the migration itself. An active public `cdxm.exe` or `codex-monitor.exe` is
+left at its current version while the other public binary and skill can still
+be installed; a later update replaces the deferred file. It never stops a process. The updater does not manage
 foreground waits, heartbeat automations, watchers, or CLI consumers.
 
 On Windows, `--target app` is intentionally unavailable because native App does

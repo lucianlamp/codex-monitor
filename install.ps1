@@ -76,6 +76,34 @@ function Resolve-CdxmSource {
     return $sourceDir.FullName
 }
 
+function Publish-CdxmBinary {
+    param(
+        [string]$SourcePath,
+        [string]$DestinationPath
+    )
+
+    $destinationFull = [IO.Path]::GetFullPath($DestinationPath)
+    $active = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ExecutablePath -and
+            [IO.Path]::GetFullPath($_.ExecutablePath) -ieq $destinationFull
+        })
+    if ($active.Count -gt 0) {
+        $pids = ($active | ForEach-Object { $_.ProcessId }) -join ', '
+        Write-Warning "Deferring update of active public binary $destinationFull (PID: $pids)"
+        return $false
+    }
+
+    Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
+    $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash
+    $destinationHash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash
+    if ($sourceHash -ne $destinationHash) {
+        throw "Installed binary hash mismatch: $DestinationPath"
+    }
+    Write-Host "Installed binary to $DestinationPath"
+    return $true
+}
+
 function Install-CdxmPrebuilt {
     $archive = 'codex-monitor-x86_64-pc-windows-msvc.zip'
     $url = "$ReleaseBase/$archive"
@@ -116,7 +144,8 @@ function Install-CdxmPrebuilt {
         throw "Checksum mismatch for $archive (expected $checksum, got $actual)"
     }
 
-    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    $payload = Join-Path $tmp 'payload'
+    New-Item -ItemType Directory -Force -Path $payload | Out-Null
     # Extract only the expected top-level binaries by exact entry name, so a
     # tampered archive cannot drop extra files or traverse outside $BinDir
     # (Zip Slip). Mirrors the bash shim's named-member tar extraction.
@@ -126,21 +155,24 @@ function Install-CdxmPrebuilt {
     try {
         foreach ($entry in $zipFile.Entries) {
             if ($allowed -contains $entry.FullName) {
-                $dest = Join-Path $BinDir $entry.Name
+                $dest = Join-Path $payload $entry.Name
                 [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
             }
         }
     } finally {
         $zipFile.Dispose()
     }
-    if (-not (Test-Path (Join-Path $BinDir 'codex-monitor.exe')) -or
-        -not (Test-Path (Join-Path $BinDir 'cdxm.exe'))) {
+    if (-not (Test-Path (Join-Path $payload 'codex-monitor.exe')) -or
+        -not (Test-Path (Join-Path $payload 'cdxm.exe'))) {
         Write-Host "Prebuilt archive did not contain the expected binaries; falling back to source build."
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
         return $false
     }
+    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    [void](Publish-CdxmBinary (Join-Path $payload 'codex-monitor.exe') (Join-Path $BinDir 'codex-monitor.exe'))
+    [void](Publish-CdxmBinary (Join-Path $payload 'cdxm.exe') (Join-Path $BinDir 'cdxm.exe'))
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-    Write-Host "Installed prebuilt cdxm to $(Join-Path $BinDir 'cdxm.exe')"
+    Write-Host 'Finished publishing prebuilt codex-monitor binaries.'
     return $true
 }
 
@@ -161,11 +193,20 @@ function Install-CdxmBinaries {
         throw "cargo is required to build codex-monitor from source. Install Rust/Cargo, then rerun this installer."
     }
     Write-Host "Note: building from source requires the Rust MSVC toolchain plus MSVC Build Tools."
-    & cargo install --path $SourceDir --bins --force --root $InstallRoot
+    & cargo build --manifest-path (Join-Path $SourceDir 'Cargo.toml') --release --bins
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo install failed with exit code $LASTEXITCODE"
+        throw "cargo build failed with exit code $LASTEXITCODE"
     }
-    Write-Host "Installed cdxm to $(Join-Path $BinDir 'cdxm.exe')"
+    $releaseDir = Join-Path $SourceDir 'target\release'
+    $monitorSource = Join-Path $releaseDir 'codex-monitor.exe'
+    $cdxmSource = Join-Path $releaseDir 'cdxm.exe'
+    if (-not (Test-Path -LiteralPath $monitorSource -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $cdxmSource -PathType Leaf)) {
+        throw "cargo build did not produce both public binaries in $releaseDir"
+    }
+    [void](Publish-CdxmBinary $monitorSource (Join-Path $BinDir 'codex-monitor.exe'))
+    [void](Publish-CdxmBinary $cdxmSource (Join-Path $BinDir 'cdxm.exe'))
+    Write-Host 'Finished publishing source-built codex-monitor binaries.'
 }
 
 function Install-CdxmSkill {

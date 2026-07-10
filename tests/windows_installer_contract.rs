@@ -226,6 +226,10 @@ fn windows_installer_has_prebuilt_download_path() {
     assert!(installer.contains("x86_64-pc-windows-msvc.zip"));
     assert!(installer.contains("Get-FileHash"));
     assert!(installer.contains("BuildFromSource"));
+    assert!(installer.contains("function Publish-CdxmBinary"));
+    assert!(installer.contains("Deferring update of active public binary"));
+    assert!(installer.contains("cargo build"));
+    assert!(!installer.contains("cargo install --path $SourceDir"));
     assert!(installer.contains("$allowed = @('codex-monitor.exe', 'cdxm.exe')"));
     assert!(!installer.contains("$allowed = @('codex-monitor.exe', 'cdxm.exe',"));
 }
