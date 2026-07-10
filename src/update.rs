@@ -1,6 +1,9 @@
 use anyhow::Result;
 use std::path::Path;
 
+mod archive;
+mod model;
+
 #[cfg(windows)]
 pub async fn run_update() -> Result<i32> {
     windows_impl::run_update().await
