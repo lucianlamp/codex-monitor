@@ -209,6 +209,28 @@ fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
 }
 
 #[cfg(windows)]
+fn windows_powershell_path(system_root: &std::path::Path) -> std::path::PathBuf {
+    system_root
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe")
+}
+
+#[cfg(windows)]
+fn windows_powershell_executable() -> std::path::PathBuf {
+    for variable in ["SystemRoot", "WINDIR"] {
+        if let Some(root) = std::env::var_os(variable) {
+            let candidate = windows_powershell_path(std::path::Path::new(&root));
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    std::path::PathBuf::from("powershell.exe")
+}
+
+#[cfg(windows)]
 fn discover_process_endpoint_candidates() -> Vec<EndpointCandidate> {
     let command = r#"
 $ErrorActionPreference='SilentlyContinue'
@@ -225,7 +247,7 @@ if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
     }
 }
 "#;
-    let output = std::process::Command::new("powershell.exe")
+    let output = std::process::Command::new(windows_powershell_executable())
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -583,6 +605,15 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
         assert_eq!(
             parsed[1].endpoint,
             Endpoint::Explicit("ws://127.0.0.1:63030".to_string())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn builds_windows_powershell_path_from_system_root() {
+        assert_eq!(
+            windows_powershell_path(std::path::Path::new(r"C:\Windows")),
+            std::path::PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
         );
     }
 

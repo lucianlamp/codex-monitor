@@ -91,14 +91,19 @@ To make the Windows Codex App and `cdxm` share the exact same app-server,
 enable the reversible App bridge and restart Codex App:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -RealCodexPath "$HOME\AppData\Local\OpenAI\Codex\bin\codex.exe" -Source .
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -Source .
 ```
 
 The installer preserves prior user-level `CODEX_CLI_PATH` and
-`CDXM_REAL_CODEX` values. It copies the selected App-bundled Codex executable
-to `~/.codex-monitor/runtime/codex-app-real.exe`, because WindowsApps package
-executables cannot be launched directly by the external bridge. Rerun the
-bridge install after a Codex App update. To restore the prior environment:
+`CDXM_REAL_CODEX` values. By default it selects the installed Codex App bundle
+before older per-user CLI copies. It copies the App-bundled Codex executable to
+`~/.codex-monitor/runtime/codex-app-real.exe` and copies its matching
+`codex-code-mode-host.exe`, command runner, and Windows sandbox setup beside it,
+because WindowsApps package executables cannot be launched directly by the
+external bridge and Codex resolves those helpers as sibling files. An explicit
+`-RealCodexPath` must point to a directory containing
+`codex-code-mode-host.exe`. Rerun the bridge install after a Codex App update.
+To restore the prior environment:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -SkipBuild -RemoveAppBridge -Source .
@@ -106,7 +111,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -Ski
 
 On Windows, `--target app` accepts only a live `codex-app-bridge` marker. It
 does not treat an ordinary Codex CLI app-server process as Codex App. Verify
-after the restart with `cdxm targets` and `cdxm --target app loaded`.
+after the restart with `cdxm targets` and `cdxm --target app loaded`. Generic
+bridge-proxied `app-server --listen stdio://` processes do not publish App
+markers, so tooling-owned servers cannot make the App target ambiguous.
 
 For development-only binary refresh:
 

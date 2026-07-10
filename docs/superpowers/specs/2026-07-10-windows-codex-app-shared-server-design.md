@@ -65,6 +65,10 @@ The bridge rejects a path resolving back to itself.
 Markers live below the existing codex-monitor runtime directory in the
 user-local application-data location and are named by bridge PID. Each marker
 is written by replace-rename so readers never see a partial document.
+The bridge publishes a marker only for the Codex App launch signature
+(`features.code_mode_host=true` plus `--analytics-default-enabled`). Generic
+CLI `app-server --listen stdio://` calls may still use the proxy but do not
+claim to be the visible App target.
 
 `cdxm --target app` on Windows reads only these markers. It validates the
 format, bridge/server liveness, loopback URL, and endpoint reachability. It no
@@ -79,8 +83,10 @@ source remains distinct from the marker-backed `codex-app-bridge` endpoint.
 
 - installs all three binaries;
 - records the real Codex path;
-- copies that executable into the codex-monitor runtime because WindowsApps
-  package executables cannot be launched directly by the external bridge;
+- copies that executable and its matching code-mode host, command runner, and
+  Windows sandbox helper into the codex-monitor runtime because WindowsApps
+  package executables cannot be launched directly by the external bridge and
+  the copied Codex executable resolves helpers from its own directory;
 - preserves any prior user-level `CODEX_CLI_PATH` value;
 - sets user-level `CODEX_CLI_PATH` to the bridge;
 - prints that Codex App must be restarted.

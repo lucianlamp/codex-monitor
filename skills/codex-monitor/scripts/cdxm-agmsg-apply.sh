@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: cdxm-agmsg-apply.sh [cwd] [--team <team> --name <agent>] [--mode auto|start|steer] [--dry-run-only] [--foreground] [--no-replace-legacy]
+Usage: cdxm-agmsg-apply.sh [cwd] [--team <team> --name <agent>] [--mode auto|start|steer] [--target auto|app|managed] [--dry-run-only] [--foreground] [--no-replace-legacy]
 
 Infer the current agmsg codex identity for cwd, run codex-monitor diagnostics,
 and apply a durable LaunchAgent monitor for the current session persona.
@@ -14,6 +14,7 @@ project=""
 team=""
 name=""
 mode="${CDXM_MONITOR_MODE:-auto}"
+target="${CDXM_MONITOR_TARGET:-auto}"
 apply=1
 foreground=0
 replace_legacy=1
@@ -34,6 +35,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --mode)
       mode="${2:?--mode requires a value}"
+      shift 2
+      ;;
+    --target)
+      target="${2:?--target requires a value}"
       shift 2
       ;;
     --dry-run-only|--no-apply)
@@ -81,6 +86,14 @@ case "$mode" in
     ;;
 esac
 
+case "$target" in
+  auto|app|managed) ;;
+  *)
+    printf 'invalid --target: %s\n' "$target" >&2
+    exit 2
+    ;;
+esac
+
 codex_monitor_bin="${CODEX_MONITOR_BIN:-}"
 if [ -z "$codex_monitor_bin" ]; then
   if command -v cdxm >/dev/null 2>&1; then
@@ -112,6 +125,8 @@ if [ ! -x "$identities_script" ]; then
   printf 'agmsg identities helper not found: %s\n' "$identities_script" >&2
   exit 127
 fi
+
+target_args=(--target "$target")
 if [ ! -x "$delivery_script" ]; then
   printf 'agmsg delivery helper not found: %s\n' "$delivery_script" >&2
   exit 127
@@ -337,7 +352,7 @@ esac
 ensure_agmsg_monitor_delivery_mode
 
 section "selection"
-printf 'cwd=%s\nteam=%s\nname=%s\nmode=%s\nthread=%s\n' "$project" "$team" "$name" "$mode" "${thread:-auto}"
+printf 'cwd=%s\nteam=%s\nname=%s\nmode=%s\ntarget=%s\nthread=%s\n' "$project" "$team" "$name" "$mode" "$target" "${thread:-auto}"
 
 if [ -x "$context_script" ]; then
   "$context_script" "$project" "$team" "$name"
@@ -349,7 +364,7 @@ if [ -n "$thread" ]; then
   watch_args+=(--thread "$thread")
 fi
 
-doctor_output="$("$codex_monitor_bin" agmsg doctor "${watch_args[@]}")"
+doctor_output="$("$codex_monitor_bin" "${target_args[@]}" agmsg doctor "${watch_args[@]}")"
 printf '%s\n' "$doctor_output"
 
 target_consumer="$(printf '%s\n' "$doctor_output" | grep -F $'doctor\tconsumer\ttarget' || true)"
@@ -404,7 +419,7 @@ if [ -n "$other_target_consumer" ]; then
 fi
 
 section "dry run"
-"$codex_monitor_bin" monitor watch agmsg "${watch_args[@]}" --dry-run
+"$codex_monitor_bin" "${target_args[@]}" monitor watch agmsg "${watch_args[@]}" --dry-run
 
 if [ "$legacy_replace_pending" -eq 1 ]; then
   section "replace legacy"
@@ -418,19 +433,19 @@ fi
 
 if [ "$foreground" -eq 1 ]; then
   section "foreground watch"
-  exec "$codex_monitor_bin" monitor watch agmsg "${watch_args[@]}"
+  exec "$codex_monitor_bin" "${target_args[@]}" monitor watch agmsg "${watch_args[@]}"
 fi
 
 if [ "$apply" -eq 0 ]; then
   platform="$(uname -s 2>/dev/null || printf 'unknown')"
   case "$platform" in
     MINGW*|MSYS*|CYGWIN*)
-      printf '\nnext: %s monitor watch agmsg' "$codex_monitor_bin"
+      printf '\nnext: %s --target %s monitor watch agmsg' "$codex_monitor_bin" "$target"
       printf ' %s' "${watch_args[@]}"
       printf '\n'
       ;;
     *)
-      printf '\nnext: %s agmsg launch-agent install' "$codex_monitor_bin"
+      printf '\nnext: %s --target %s agmsg launch-agent install' "$codex_monitor_bin" "$target"
       printf ' %s' "${watch_args[@]}"
       printf ' --force --load\n'
       ;;
@@ -452,7 +467,7 @@ case "$platform" in
     safe_name="$(printf '%s' "$name" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')"
     stdout_log="$log_dir/agmsg-$safe_team-$safe_name.out.log"
     stderr_log="$log_dir/agmsg-$safe_team-$safe_name.err.log"
-    nohup "$codex_monitor_bin" monitor watch agmsg "${watch_args[@]}" >"$stdout_log" 2>"$stderr_log" < /dev/null &
+    nohup "$codex_monitor_bin" "${target_args[@]}" monitor watch agmsg "${watch_args[@]}" >"$stdout_log" 2>"$stderr_log" < /dev/null &
     watch_pid="$!"
     printf 'started_pid=%s\nstdout_log=%s\nstderr_log=%s\n' "$watch_pid" "$stdout_log" "$stderr_log"
     sleep 0.5
@@ -461,14 +476,14 @@ case "$platform" in
       tail -50 "$stderr_log" >&2 || true
       exit 1
     fi
-    "$codex_monitor_bin" agmsg doctor "${watch_args[@]}" || true
+    "$codex_monitor_bin" "${target_args[@]}" agmsg doctor "${watch_args[@]}" || true
     exit 0
     ;;
   Darwin*) ;;
   *)
     section "background watch unavailable"
     printf 'durable LaunchAgent install is only available on macOS, and this helper has no background installer for platform=%s.\n' "$platform" >&2
-    printf 'Run foreground watch manually: %s monitor watch agmsg' "$codex_monitor_bin"
+    printf 'Run foreground watch manually: %s --target %s monitor watch agmsg' "$codex_monitor_bin" "$target"
     printf ' %s' "${watch_args[@]}"
     printf '\n'
     exit 1
@@ -476,7 +491,7 @@ case "$platform" in
 esac
 
 section "launch-agent"
-status_output="$("$codex_monitor_bin" agmsg launch-agent status --team "$team" --name "$name" 2>&1 || true)"
+status_output="$("$codex_monitor_bin" "${target_args[@]}" agmsg launch-agent status --team "$team" --name "$name" 2>&1 || true)"
 printf '%s\n' "$status_output"
 if printf '%s\n' "$status_output" | grep -q 'installed=true' \
   && printf '%s\n' "$status_output" | grep -q 'loaded=true'; then
@@ -492,5 +507,5 @@ if printf '%s\n' "$status_output" | grep -q 'installed=true' \
   fi
 fi
 
-"$codex_monitor_bin" agmsg launch-agent install "${watch_args[@]}" --force --load
-"$codex_monitor_bin" agmsg launch-agent status --team "$team" --name "$name"
+"$codex_monitor_bin" "${target_args[@]}" agmsg launch-agent install "${watch_args[@]}" --force --load
+"$codex_monitor_bin" "${target_args[@]}" agmsg launch-agent status --team "$team" --name "$name"

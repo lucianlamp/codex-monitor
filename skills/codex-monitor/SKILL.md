@@ -138,13 +138,20 @@ For the Windows Codex App itself, use the separate reversible shared-server
 bridge. This is required when delivery must reach the exact visible App thread:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -RealCodexPath "$HOME\AppData\Local\OpenAI\Codex\bin\codex.exe" -Source .
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -Source .
 ```
+
+The installer must stage both the App-bundled Codex executable and its matching
+`codex-code-mode-host.exe` (plus available command-runner and sandbox helpers)
+in `~/.codex-monitor/runtime`. If `-RealCodexPath` is supplied explicitly, its
+directory must contain the matching code-mode host.
 
 Restart Codex App, then require `cdxm targets` to show
 `codex-app-bridge` and `cdxm --target app loaded` to include the visible
 thread. An ordinary `codex-app-server-process` endpoint is not a valid App
-target. Roll back with `-SkipBuild -RemoveAppBridge` and another App restart.
+target. Apply an agmsg receiver for that exact App endpoint with
+`cdxm-agmsg-apply.sh --target app ...`. Roll back with
+`-SkipBuild -RemoveAppBridge` and another App restart.
 
 For daily Codex CLI monitor use, confirm the Codex entrypoint is shim-backed:
 

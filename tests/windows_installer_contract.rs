@@ -86,6 +86,16 @@ fn agmsg_apply_uses_windows_background_watch_instead_of_launch_agent() {
 }
 
 #[test]
+fn agmsg_apply_can_pin_the_codex_app_target() {
+    let helper = apply_helper();
+
+    assert!(helper.contains("--target auto|app|managed"));
+    assert!(helper.contains("target=\"${CDXM_MONITOR_TARGET:-auto}\""));
+    assert!(helper.contains("target_args=(--target \"$target\")"));
+    assert!(helper.contains("\"${target_args[@]}\" monitor watch agmsg"));
+}
+
+#[test]
 fn agmsg_apply_can_replace_legacy_codex_bridge_on_windows() {
     let helper = apply_helper();
 
@@ -123,9 +133,14 @@ fn windows_installer_manages_codex_app_bridge_reversibly() {
         "[string]$RealCodexPath",
         "cdxm-codex-app-bridge.exe",
         "codex-app-real.exe",
+        "codex-code-mode-host.exe",
+        "codex-command-runner.exe",
+        "codex-windows-sandbox-setup.exe",
         "app-bridge-env.json",
         "CODEX_CLI_PATH",
         "CDXM_REAL_CODEX",
+        "function Resolve-CodexRuntimeCompanionPath",
+        "function Copy-CdxmRuntimeFile",
         "function Enable-CdxmAppBridge",
         "function Disable-CdxmAppBridge",
     ] {
@@ -136,8 +151,10 @@ fn windows_installer_manages_codex_app_bridge_reversibly() {
     }
     assert!(installer.contains("InstallAppBridge.IsPresent -and $RemoveAppBridge.IsPresent"));
     assert!(installer.contains("Test-CdxmOwnedAppBridge"));
-    assert!(installer
-        .contains("Copy-Item -LiteralPath $ResolvedRealCodexPath -Destination $ManagedRealCodex"));
+    assert!(installer.contains("Copy-CdxmRuntimeFile $ResolvedRealCodexPath $ManagedRealCodex"));
+    assert!(installer.contains("$ManagedCodeModeHost"));
+    assert!(installer.contains("$ManagedCommandRunner"));
+    assert!(installer.contains("$ManagedSandboxSetup"));
     assert!(installer.contains("Preserving the current user environment"));
     assert!(installer.contains("Codex App must be restarted"));
 }
@@ -155,4 +172,5 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("-InstallAppBridge"));
     assert!(readme.contains("-RemoveAppBridge"));
     assert!(readme.contains("codex-app-bridge"));
+    assert!(readme.contains("codex-code-mode-host.exe"));
 }

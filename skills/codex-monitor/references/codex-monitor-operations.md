@@ -18,14 +18,17 @@ Joined-persona apply:
 ```bash
 ~/.codex/skills/codex-monitor/scripts/cdxm-agmsg-apply.sh /path/to/project
 ~/.codex/skills/codex-monitor/scripts/cdxm-agmsg-apply.sh /path/to/project --team dev --name kimura
+~/.codex/skills/codex-monitor/scripts/cdxm-agmsg-apply.sh /path/to/project --team dev --name kimura --target app
 ```
 
 The apply helper supports multiple Codex sessions in the same cwd by resolving
 the current session persona from explicit args/env, `AGMSG_CODEX_NAME`, or the
 agmsg thread-name marker written by `/agmsg actas`. When it can resolve the
 current thread, it passes `--thread` through to doctor, dry-run, foreground watch,
-and LaunchAgent install. It only asks for a persona when no session-specific
-identity exists and `whoami.sh` still reports `multiple=true`.
+and LaunchAgent install. If more than one app-server exposes that thread, pass
+`--target app` for the marker-backed Codex App bridge or `--target managed` for
+the managed CLI. It only asks for a persona when no session-specific identity
+exists and `whoami.sh` still reports `multiple=true`.
 
 Explicit apply prefers codex-monitor over the legacy agmsg `codex-bridge` for
 the same `team/name`: if `doctor` reports `kind=codex-bridge` as the target
@@ -106,7 +109,12 @@ cdxm --target app remote connect
   and agmsg codex bridge processes.
 - `--target app` uses the Codex App control socket on Unix. On Windows it uses
   only a live `codex-app-bridge` marker created by the reversible shared-server
-  integration; generic CLI app-server listeners are refused.
+  integration; generic CLI app-server listeners are refused. The Windows
+  installer stages the App-bundled Codex executable together with its matching
+  `codex-code-mode-host.exe` and other available executable helpers because the
+  managed copy resolves them from its own runtime directory. Only the Codex App
+  launch signature publishes an App marker; generic bridge-proxied stdio
+  app-servers are excluded.
 - cwd-based commands probe `thread/loaded/list` plus `thread/list` to choose a
   live endpoint with a loaded thread for that cwd.
 - Explicit `--thread` commands probe `thread/loaded/list` and refuse unloaded

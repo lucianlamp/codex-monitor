@@ -1194,6 +1194,7 @@ async fn resolve_threads_for_cwd(
     endpoint: crate::target::Endpoint,
     cwd: &str,
 ) -> anyhow::Result<Vec<crate::target::ThreadSummary>> {
+    let endpoint = crate::target::resolve_app_endpoint(endpoint)?;
     if endpoint != crate::target::Endpoint::Auto {
         return threads_for_cwd(endpoint, cwd).await;
     }

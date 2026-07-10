@@ -19,7 +19,7 @@
 - Test: `src/app_bridge.rs`
 - Test: `src/target.rs`
 
-- [ ] **Step 1: Add failing marker parsing and selection tests**
+- [x] **Step 1: Add failing marker parsing and selection tests**
 
 Add tests using a temporary marker directory. The test data must use the real
 serialized shape and must prove a valid marker is selected while malformed,
@@ -49,13 +49,13 @@ fn windows_app_target_uses_only_bridge_markers() {
 }
 ```
 
-- [ ] **Step 2: Run focused tests and verify red**
+- [x] **Step 2: Run focused tests and verify red**
 
 Run: `cargo test app_marker`, then `cargo test windows_app_target`.
 
 Expected: compile failure because `AppBridgeMarker` and marker discovery do not exist, followed by the existing selector choosing the process candidate.
 
-- [ ] **Step 3: Implement marker storage and discovery**
+- [x] **Step 3: Implement marker storage and discovery**
 
 Create `AppBridgeMarker` and these focused APIs:
 
@@ -88,13 +88,13 @@ Modify Windows discovery to add marker candidates with source
 source. Candidate deduplication gives bridge markers a higher source priority
 than generic process discovery.
 
-- [ ] **Step 4: Run focused tests and verify green**
+- [x] **Step 4: Run focused tests and verify green**
 
 Run: `cargo test app_marker` and `cargo test windows_app_target`.
 
 Expected: all focused tests pass.
 
-- [ ] **Step 5: Commit marker target work**
+- [x] **Step 5: Commit marker target work**
 
 Run:
 
@@ -112,7 +112,7 @@ git commit -m "fix: identify Windows Codex App through bridge markers"
 - Test: `src/app_bridge.rs`
 - Test: `tests/app_bridge.rs`
 
-- [ ] **Step 1: Add failing argument and executable-resolution tests**
+- [x] **Step 1: Add failing argument and executable-resolution tests**
 
 Test an invocation with config arguments before `app-server`, an ordinary
 `--version` passthrough, explicit `CDXM_REAL_CODEX`, Electron resources
@@ -124,28 +124,28 @@ assert_eq!(invocation_kind(&["--version".into()]), InvocationKind::Passthrough);
 assert!(reject_recursive_executable(&bridge, &bridge).is_err());
 ```
 
-- [ ] **Step 2: Run argument tests and verify red**
+- [x] **Step 2: Run argument tests and verify red**
 
 Run: `cargo test app_bridge::tests::invocation`, then
 `cargo test app_bridge::tests::real_codex`.
 
 Expected: compile failure because invocation classification and executable resolution are not implemented.
 
-- [ ] **Step 3: Implement launch preparation**
+- [x] **Step 3: Implement launch preparation**
 
 Add `InvocationKind`, `RealCodexSources`, `invocation_kind`,
 `resolve_real_codex`, loopback port allocation, readiness polling, and argument
 rewriting. The rewritten command retains all arguments except an existing
 `--listen` pair and appends exactly one bridge-owned `--listen` URL.
 
-- [ ] **Step 4: Add a failing bidirectional proxy integration test**
+- [x] **Step 4: Add a failing bidirectional proxy integration test**
 
 Start a fake WebSocket server, feed initialize and thread/list JSON lines into
 the bridge proxy, and assert exact frames in both directions, including a
 server-initiated request and notification. Close stdin and assert marker
 removal and child shutdown.
 
-- [ ] **Step 5: Implement proxy runtime and binary**
+- [x] **Step 5: Implement proxy runtime and binary**
 
 Enable Tokio `io-std`. Implement:
 
@@ -160,13 +160,13 @@ close frames, and exits when stdin, WebSocket, or child server closes. Child
 stdout is suppressed and child stderr is inherited so protocol stdout remains
 clean. A marker guard removes its file on every normal/error exit.
 
-- [ ] **Step 6: Run bridge tests and verify green**
+- [x] **Step 6: Run bridge tests and verify green**
 
 Run: `cargo test app_bridge`.
 
 Expected: unit and integration bridge tests pass.
 
-- [ ] **Step 7: Commit bridge runtime**
+- [x] **Step 7: Commit bridge runtime**
 
 Run:
 
@@ -184,20 +184,20 @@ git commit -m "feat: add Windows Codex App shared server bridge"
 - Modify: `skills/codex-monitor/SKILL.md`
 - Modify: `skills/codex-monitor/references/codex-monitor-operations.md`
 
-- [ ] **Step 1: Add failing installer contract tests**
+- [x] **Step 1: Add failing installer contract tests**
 
 Assert the installer exposes `-InstallAppBridge`, `-RemoveAppBridge`, and
 `-RealCodexPath`; installs `cdxm-codex-app-bridge.exe`; saves prior
 `CODEX_CLI_PATH` and `CDXM_REAL_CODEX`; does not overwrite the original backup
 on idempotent enable; and restores only codex-monitor-owned values on removal.
 
-- [ ] **Step 2: Run installer tests and verify red**
+- [x] **Step 2: Run installer tests and verify red**
 
 Run: `cargo test --test windows_installer_contract app_bridge`.
 
 Expected: assertions fail because the flags and environment management are absent.
 
-- [ ] **Step 3: Implement enable and removal functions**
+- [x] **Step 3: Implement enable and removal functions**
 
 Add mutually exclusive switches and these functions:
 
@@ -211,12 +211,13 @@ Persist the original user environment values in
 `$InstallRoot\app-bridge-env.json` before the first enable. Set
 `CODEX_CLI_PATH` to `$BinDir\cdxm-codex-app-bridge.exe` and
 copy the resolved executable to
-`$InstallRoot\runtime\codex-app-real.exe` before setting `CDXM_REAL_CODEX` to
-that managed copy. Removal restores the backup
+`$InstallRoot\runtime\codex-app-real.exe` together with the matching
+`codex-code-mode-host.exe` and available command-runner/sandbox helpers before
+setting `CDXM_REAL_CODEX` to that managed copy. Removal restores the backup
 only when the active `CODEX_CLI_PATH` still equals the installed bridge; an
 unrelated later user override is preserved with a warning.
 
-- [ ] **Step 4: Document activation, verification, and rollback**
+- [x] **Step 4: Document activation, verification, and rollback**
 
 Document:
 
@@ -228,13 +229,13 @@ Document:
 State that App restart is required, `--target app` is marker-backed on
 Windows, and acknowledgement without visible delivery is not sufficient.
 
-- [ ] **Step 5: Run installer tests and verify green**
+- [x] **Step 5: Run installer tests and verify green**
 
 Run: `cargo test --test windows_installer_contract`.
 
 Expected: all Windows installer contract tests pass.
 
-- [ ] **Step 6: Commit installer and docs**
+- [x] **Step 6: Commit installer and docs**
 
 Run:
 
@@ -248,7 +249,7 @@ git commit -m "feat: install shared Codex App bridge on Windows"
 **Files:**
 - Modify only if a verified defect is found in the preceding files.
 
-- [ ] **Step 1: Run repository verification**
+- [x] **Step 1: Run repository verification**
 
 Run separately:
 
@@ -261,27 +262,28 @@ git diff --check
 
 Expected: every command exits zero with no failing test or warning.
 
-- [ ] **Step 2: Install without restarting App**
+- [x] **Step 2: Install without restarting App**
 
 Stop only processes locking installed codex-monitor binaries. Run the local
 installer with explicit real Codex path and App bridge enablement. Restore any
 stopped unrelated codex-monitor watcher with the same arguments.
 
 ```powershell
-.\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -RealCodexPath "$HOME\AppData\Local\OpenAI\Codex\bin\codex.exe" -Source .
+.\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -Source .
 ```
 
-Expected: all three binaries and the skill install; user environment values
-point to the bridge and real executable.
+Expected: all three codex-monitor binaries, the skill, and the App-bundled Codex
+runtime companions install; user environment values point to the bridge and
+managed real executable.
 
-- [ ] **Step 3: Restart Codex App and re-open this thread**
+- [x] **Step 3: Restart Codex App and re-open this thread**
 
 Close and restart only Codex App after all code and installation checks pass.
 The App must reopen the existing thread rather than start or fork one. Confirm
 the bridge and real app-server processes are live and the marker source is
 `codex-app-bridge`.
 
-- [ ] **Step 4: Prove exact thread targeting**
+- [x] **Step 4: Prove exact thread targeting**
 
 Run:
 
@@ -294,13 +296,13 @@ cdxm --target app threads --cwd C:\Users\ytvar\dev\codex-monitor
 Expected: the visible thread id appears in loaded and cwd results. No generic
 `codex-app-server-process` is accepted as `--target app`.
 
-- [ ] **Step 5: Start the exact watcher and deliver a real message**
+- [x] **Step 5: Start the exact watcher and deliver a real message**
 
 Apply `cdxm/codex` to the visible thread, then send a unique `agmsg` message to
 `cdxm/codex` using the official scripts. Verify all three layers: app-server
 ack, adapter state advancement, and visible message in this same App screen.
 
-- [ ] **Step 6: Completion audit and final commit**
+- [x] **Step 6: Completion audit and final commit**
 
 Review the full diff against the design, verify no temporary files/processes
 remain, rerun relevant checks after any adjustment, and commit any final fixes.

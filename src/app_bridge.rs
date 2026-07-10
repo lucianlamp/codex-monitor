@@ -44,6 +44,22 @@ pub fn invocation_kind(args: &[OsString]) -> InvocationKind {
         .unwrap_or(InvocationKind::Passthrough)
 }
 
+pub fn publishes_app_target_marker(args: &[OsString]) -> bool {
+    if !matches!(invocation_kind(args), InvocationKind::AppServer { .. }) {
+        return false;
+    }
+    let has_code_mode_config = args.windows(2).any(|pair| {
+        matches!(pair[0].to_str(), Some("-c" | "--config"))
+            && pair[1] == OsStr::new("features.code_mode_host=true")
+    }) || args
+        .iter()
+        .any(|arg| arg == OsStr::new("--config=features.code_mode_host=true"));
+    let has_app_analytics_flag = args
+        .iter()
+        .any(|arg| arg == OsStr::new("--analytics-default-enabled"));
+    has_code_mode_config && has_app_analytics_flag
+}
+
 pub fn rewrite_app_server_args(args: &[OsString], endpoint: &str) -> Vec<OsString> {
     let mut rewritten = Vec::with_capacity(args.len() + 2);
     let mut index = 0;
@@ -122,7 +138,9 @@ pub async fn run_bridge(args: Vec<OsString>) -> anyhow::Result<i32> {
     let real_codex = resolve_real_codex(&real_codex_sources_from_env(), &current_executable)?;
     match invocation_kind(&args) {
         InvocationKind::Passthrough => run_passthrough(&real_codex, &args).await,
-        InvocationKind::AppServer { .. } => run_app_server_bridge(&real_codex, &args).await,
+        InvocationKind::AppServer { .. } => {
+            run_app_server_bridge(&real_codex, &args, publishes_app_target_marker(&args)).await
+        }
     }
 }
 
@@ -138,7 +156,11 @@ async fn run_passthrough(real_codex: &Path, args: &[OsString]) -> anyhow::Result
     Ok(status.code().unwrap_or(1))
 }
 
-async fn run_app_server_bridge(real_codex: &Path, args: &[OsString]) -> anyhow::Result<i32> {
+async fn run_app_server_bridge(
+    real_codex: &Path,
+    args: &[OsString],
+    publish_marker: bool,
+) -> anyhow::Result<i32> {
     let port = pick_loopback_port().await?;
     let endpoint = format!("ws://127.0.0.1:{port}");
     let rewritten = rewrite_app_server_args(args, &endpoint);
@@ -159,15 +181,19 @@ async fn run_app_server_bridge(real_codex: &Path, args: &[OsString]) -> anyhow::
         return Err(error);
     }
 
-    let marker = AppBridgeMarker {
-        version: APP_BRIDGE_MARKER_VERSION,
-        endpoint: endpoint.clone(),
-        bridge_pid: std::process::id(),
-        server_pid,
-        real_codex: real_codex.to_path_buf(),
+    let _marker_guard = if publish_marker {
+        let marker = AppBridgeMarker {
+            version: APP_BRIDGE_MARKER_VERSION,
+            endpoint: endpoint.clone(),
+            bridge_pid: std::process::id(),
+            server_pid,
+            real_codex: real_codex.to_path_buf(),
+        };
+        let marker_path = write_marker_atomic(&marker_dir()?, &marker)?;
+        Some(MarkerGuard(marker_path))
+    } else {
+        None
     };
-    let marker_path = write_marker_atomic(&marker_dir()?, &marker)?;
-    let _marker_guard = MarkerGuard(marker_path);
 
     let input = tokio::io::BufReader::new(tokio::io::stdin());
     let output = tokio::io::stdout();
@@ -434,6 +460,24 @@ mod tests {
             invocation_kind(&[OsString::from("--version")]),
             InvocationKind::Passthrough
         );
+    }
+
+    #[test]
+    fn only_codex_app_signature_publishes_app_target_marker() {
+        let app_args = vec![
+            OsString::from("-c"),
+            OsString::from("features.code_mode_host=true"),
+            OsString::from("app-server"),
+            OsString::from("--analytics-default-enabled"),
+        ];
+        let generic_args = vec![
+            OsString::from("app-server"),
+            OsString::from("--listen"),
+            OsString::from("stdio://"),
+        ];
+
+        assert!(publishes_app_target_marker(&app_args));
+        assert!(!publishes_app_target_marker(&generic_args));
     }
 
     #[test]
