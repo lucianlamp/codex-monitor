@@ -874,6 +874,19 @@ async fn agmsg_doctor_thread_rows(
     cwd: &str,
 ) -> Vec<Vec<String>> {
     let mut rows = Vec::new();
+    let endpoint = match crate::target::resolve_app_endpoint(endpoint.clone()) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            rows.push(vec![
+                "doctor".into(),
+                "thread".into(),
+                "error".into(),
+                format!("endpoint={}", crate::target::endpoint_label(&endpoint)),
+                error.to_string(),
+            ]);
+            return rows;
+        }
+    };
     match endpoint {
         crate::target::Endpoint::Auto => {
             for candidate in crate::target::discover_auto_endpoint_candidates() {
@@ -1265,6 +1278,7 @@ pub(crate) async fn resolve_endpoint_for_loaded_thread(
     endpoint: crate::target::Endpoint,
     thread: &str,
 ) -> anyhow::Result<crate::target::Endpoint> {
+    let endpoint = crate::target::resolve_app_endpoint(endpoint)?;
     if endpoint != crate::target::Endpoint::Auto {
         let loaded = endpoint_has_loaded_thread(endpoint.clone(), thread).await?;
         if loaded {
