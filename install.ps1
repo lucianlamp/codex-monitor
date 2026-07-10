@@ -19,6 +19,8 @@ $ErrorActionPreference = 'Stop'
 
 $BinDir = Join-Path $InstallRoot 'bin'
 $ShimTarget = Join-Path $AgentsBin 'codex.cmd'
+$CdxmCompatTarget = Join-Path $AgentsBin 'cdxm.cmd'
+$LegacyCdxmTarget = Join-Path $BinDir 'cdxm.exe'
 $AppBridgeTarget = Join-Path $BinDir 'cdxm-codex-app-bridge.exe'
 $AppBridgeEnvBackup = Join-Path $InstallRoot 'app-bridge-env.json'
 $UserPathBackup = Join-Path $InstallRoot 'user-path-backup.json'
@@ -76,7 +78,7 @@ function Resolve-CdxmSource {
     return $sourceDir.FullName
 }
 
-function Publish-CdxmBinary {
+function Publish-CodexMonitorBinary {
     param(
         [string]$SourcePath,
         [string]$DestinationPath
@@ -150,7 +152,7 @@ function Install-CdxmPrebuilt {
     # tampered archive cannot drop extra files or traverse outside $BinDir
     # (Zip Slip). Mirrors the bash shim's named-member tar extraction.
     try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue } catch { }
-    $allowed = @('codex-monitor.exe', 'cdxm.exe')
+    $allowed = @('codex-monitor.exe')
     $zipFile = [System.IO.Compression.ZipFile]::OpenRead($zip)
     try {
         foreach ($entry in $zipFile.Entries) {
@@ -162,15 +164,13 @@ function Install-CdxmPrebuilt {
     } finally {
         $zipFile.Dispose()
     }
-    if (-not (Test-Path (Join-Path $payload 'codex-monitor.exe')) -or
-        -not (Test-Path (Join-Path $payload 'cdxm.exe'))) {
-        Write-Host "Prebuilt archive did not contain the expected binaries; falling back to source build."
+    if (-not (Test-Path (Join-Path $payload 'codex-monitor.exe'))) {
+        Write-Host "Prebuilt archive did not contain codex-monitor.exe; falling back to source build."
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
         return $false
     }
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-    [void](Publish-CdxmBinary (Join-Path $payload 'codex-monitor.exe') (Join-Path $BinDir 'codex-monitor.exe'))
-    [void](Publish-CdxmBinary (Join-Path $payload 'cdxm.exe') (Join-Path $BinDir 'cdxm.exe'))
+    [void](Publish-CodexMonitorBinary (Join-Path $payload 'codex-monitor.exe') (Join-Path $BinDir 'codex-monitor.exe'))
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     Write-Host 'Finished publishing prebuilt codex-monitor binaries.'
     return $true
@@ -193,20 +193,49 @@ function Install-CdxmBinaries {
         throw "cargo is required to build codex-monitor from source. Install Rust/Cargo, then rerun this installer."
     }
     Write-Host "Note: building from source requires the Rust MSVC toolchain plus MSVC Build Tools."
-    & cargo build --manifest-path (Join-Path $SourceDir 'Cargo.toml') --release --bins
+    & cargo build --manifest-path (Join-Path $SourceDir 'Cargo.toml') --release --bin codex-monitor
     if ($LASTEXITCODE -ne 0) {
         throw "cargo build failed with exit code $LASTEXITCODE"
     }
     $releaseDir = Join-Path $SourceDir 'target\release'
     $monitorSource = Join-Path $releaseDir 'codex-monitor.exe'
-    $cdxmSource = Join-Path $releaseDir 'cdxm.exe'
-    if (-not (Test-Path -LiteralPath $monitorSource -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $cdxmSource -PathType Leaf)) {
-        throw "cargo build did not produce both public binaries in $releaseDir"
+    if (-not (Test-Path -LiteralPath $monitorSource -PathType Leaf)) {
+        throw "cargo build did not produce codex-monitor.exe in $releaseDir"
     }
-    [void](Publish-CdxmBinary $monitorSource (Join-Path $BinDir 'codex-monitor.exe'))
-    [void](Publish-CdxmBinary $cdxmSource (Join-Path $BinDir 'cdxm.exe'))
+    [void](Publish-CodexMonitorBinary $monitorSource (Join-Path $BinDir 'codex-monitor.exe'))
     Write-Host 'Finished publishing source-built codex-monitor binaries.'
+}
+
+function Write-CdxmCompatibilityLauncher {
+    New-Item -ItemType Directory -Force -Path $AgentsBin | Out-Null
+    $monitorTarget = [IO.Path]::GetFullPath((Join-Path $BinDir 'codex-monitor.exe'))
+    $temporary = "$CdxmCompatTarget.tmp-$([Guid]::NewGuid().ToString('N'))"
+    $cmd = @"
+@echo off
+"$monitorTarget" %*
+exit /b %ERRORLEVEL%
+"@
+    Set-Content -LiteralPath $temporary -Value $cmd -Encoding ascii
+    Move-Item -LiteralPath $temporary -Destination $CdxmCompatTarget -Force
+    Write-Host "Installed cdxm compatibility launcher to $CdxmCompatTarget"
+}
+
+function Cleanup-CdxmLegacyBinary {
+    $legacyFull = [IO.Path]::GetFullPath($LegacyCdxmTarget)
+    $active = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ExecutablePath -and
+            [IO.Path]::GetFullPath($_.ExecutablePath) -ieq $legacyFull
+        })
+    if ($active.Count -gt 0) {
+        $pids = ($active | ForEach-Object { $_.ProcessId }) -join ', '
+        Write-Warning "Deferring cleanup of active legacy cdxm.exe (PID: $pids)"
+        return
+    }
+    if (Test-Path -LiteralPath $LegacyCdxmTarget -PathType Leaf) {
+        Remove-Item -LiteralPath $LegacyCdxmTarget -Force
+        Write-Host "Removed inactive legacy binary $LegacyCdxmTarget"
+    }
 }
 
 function Install-CdxmSkill {
@@ -452,11 +481,14 @@ try {
 
     Migrate-CdxmLegacyAppBridge
 
-    if (Confirm-CdxmStep "Install cdxm and codex-monitor binaries to $BinDir?" $true) {
+    if (Confirm-CdxmStep "Install codex-monitor binary to $BinDir?" $true) {
         Install-CdxmBinaries $SourceDir
     } else {
         Write-Host 'Skipped binary install.'
     }
+
+    Write-CdxmCompatibilityLauncher
+    Cleanup-CdxmLegacyBinary
 
     if (Confirm-CdxmStep "Install Codex skill to $SkillDir?" $true) {
         Install-CdxmSkill $SourceDir

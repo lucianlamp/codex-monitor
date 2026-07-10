@@ -142,6 +142,8 @@ pub fn finalize_environment(paths: &InstallPaths) -> anyhow::Result<()> {
         &removed_path_entries,
     );
     apply_environment(&action, &user_path)?;
+    write_cdxm_compat_launcher(paths)?;
+    cleanup_legacy_cdxm_binary(paths, &inventory)?;
     cleanup_legacy_files(paths, &inventory)?;
 
     if matches!(action, LegacyEnvironmentAction::Restore { .. }) {
@@ -200,6 +202,10 @@ Remove-Item -LiteralPath $env:CDXM_UPDATE_STAGING -Recurse -Force -ErrorAction S
 
 fn legacy_bridge_path(paths: &InstallPaths) -> PathBuf {
     paths.root.join("bin").join("cdxm-codex-app-bridge.exe")
+}
+
+fn legacy_cdxm_path(paths: &InstallPaths) -> PathBuf {
+    paths.root.join("bin").join("cdxm.exe")
 }
 
 fn legacy_runtime_dir(paths: &InstallPaths) -> PathBuf {
@@ -404,6 +410,85 @@ fn cleanup_legacy_files(paths: &InstallPaths, inventory: &WindowsInventory) -> a
             "codex-monitor update deferred cleanup of active legacy runtime files: {details}"
         );
     }
+    Ok(())
+}
+
+fn cleanup_legacy_cdxm_binary(
+    paths: &InstallPaths,
+    inventory: &WindowsInventory,
+) -> anyhow::Result<bool> {
+    let legacy = legacy_cdxm_path(paths);
+    let active = inventory
+        .processes
+        .iter()
+        .filter(|process| paths_equal(&process.path, &legacy))
+        .collect::<Vec<_>>();
+    if !active.is_empty() {
+        let pids = active
+            .iter()
+            .map(|process| process.pid.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!("codex-monitor update deferred cleanup of active legacy cdxm.exe (PID: {pids})");
+        return Ok(true);
+    }
+    if legacy.is_file() {
+        std::fs::remove_file(&legacy).with_context(|| {
+            format!(
+                "failed to remove inactive legacy binary {}",
+                legacy.display()
+            )
+        })?;
+    }
+    Ok(false)
+}
+
+fn write_cdxm_compat_launcher(paths: &InstallPaths) -> anyhow::Result<()> {
+    let base = directories::BaseDirs::new()
+        .context("could not resolve the current user's home directory")?;
+    let launcher = base.home_dir().join(".agents").join("bin").join("cdxm.cmd");
+    let target = paths.root.join("bin").join("codex-monitor.exe");
+    write_cdxm_compat_launcher_at(&launcher, &target)
+}
+
+fn write_cdxm_compat_launcher_at(launcher: &Path, target: &Path) -> anyhow::Result<()> {
+    let parent = launcher.parent().with_context(|| {
+        format!(
+            "compatibility launcher has no parent: {}",
+            launcher.display()
+        )
+    })?;
+    std::fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create compatibility launcher directory {}",
+            parent.display()
+        )
+    })?;
+    let temporary = launcher.with_extension(format!("cmd.tmp-{}", std::process::id()));
+    let content = format!(
+        "@echo off\r\n\"{}\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+        target.display()
+    );
+    std::fs::write(&temporary, content).with_context(|| {
+        format!(
+            "failed to write compatibility launcher {}",
+            temporary.display()
+        )
+    })?;
+    if launcher.is_file() {
+        std::fs::remove_file(launcher).with_context(|| {
+            format!(
+                "failed to replace compatibility launcher {}",
+                launcher.display()
+            )
+        })?;
+    }
+    std::fs::rename(&temporary, launcher).with_context(|| {
+        format!(
+            "failed to publish compatibility launcher {}",
+            launcher.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -723,6 +808,49 @@ mod tests {
 
         assert!(!legacy[0].exists());
         assert!(legacy[1..].iter().all(|path| path.exists()));
+    }
+
+    #[test]
+    fn active_legacy_cdxm_binary_is_deferred() {
+        let temp = TempDir::new().unwrap();
+        let paths = InstallPaths::new(temp.path().join("install"));
+        let legacy = legacy_cdxm_path(&paths);
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"old cdxm").unwrap();
+        let mut inventory = fixture_inventory(Some(PathBuf::from(r"C:\Native\codex.exe")));
+        inventory.processes.push(LegacyProcess {
+            pid: 42,
+            path: legacy.clone(),
+        });
+
+        assert!(cleanup_legacy_cdxm_binary(&paths, &inventory).unwrap());
+        assert!(legacy.exists());
+    }
+
+    #[test]
+    fn inactive_legacy_cdxm_binary_is_removed() {
+        let temp = TempDir::new().unwrap();
+        let paths = InstallPaths::new(temp.path().join("install"));
+        let legacy = legacy_cdxm_path(&paths);
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"old cdxm").unwrap();
+
+        assert!(!cleanup_legacy_cdxm_binary(&paths, &fixture_inventory(None)).unwrap());
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn compatibility_launcher_forwards_to_installed_monitor() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("install/bin/codex-monitor.exe");
+        let launcher = temp.path().join("agents/bin/cdxm.cmd");
+
+        write_cdxm_compat_launcher_at(&launcher, &target).unwrap();
+
+        let content = std::fs::read_to_string(launcher).unwrap();
+        assert!(content.contains("@echo off"));
+        assert!(content.contains(&format!("\"{}\" %*", target.display())));
+        assert!(content.contains("exit /b %ERRORLEVEL%"));
     }
 
     #[test]
