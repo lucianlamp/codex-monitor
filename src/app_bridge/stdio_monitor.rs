@@ -1,9 +1,14 @@
 use std::{
-    collections::HashMap,
+    collections::{hash_map::RandomState, HashMap},
+    ffi::OsString,
+    hash::{BuildHasher, Hasher},
+    path::Path,
+    process::Stdio,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
@@ -12,12 +17,19 @@ use serde_json::{json, Value};
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    process::Command,
     sync::{mpsc, watch, Mutex},
     task::JoinSet,
 };
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{
+    accept_async_with_config,
+    tungstenite::{protocol::WebSocketConfig, Message},
+};
 
 use super::monitor_router::{ChildOutput, MonitorInput, MonitorRouter};
+use super::{
+    marker_dir, write_marker_atomic, AppBridgeMarker, MarkerGuard, APP_BRIDGE_MARKER_VERSION,
+};
 
 const APP_WRITE_CAPACITY: usize = 32;
 const MONITOR_WRITE_CAPACITY: usize = 64;
@@ -31,6 +43,127 @@ enum ChildWrite {
 type ClientSender = mpsc::Sender<Message>;
 type Clients = Arc<Mutex<HashMap<u64, ClientSender>>>;
 type SharedRouter = Arc<Mutex<MonitorRouter>>;
+
+pub(super) async fn run(real_codex: &Path, args: &[OsString]) -> anyhow::Result<i32> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .context("failed to bind the App monitor listener")?;
+    let endpoint = format!("ws://{}", listener.local_addr()?);
+    let mut child = Command::new(real_codex)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("failed to start real Codex {}", real_codex.display()))?;
+    let server_pid = child
+        .id()
+        .ok_or_else(|| anyhow::anyhow!("real Codex app-server has no process id"))?;
+    let child_input = child
+        .stdin
+        .take()
+        .context("real Codex app-server stdin was not piped")?;
+    let child_output = child
+        .stdout
+        .take()
+        .context("real Codex app-server stdout was not piped")?;
+    let (ready_tx, mut ready_rx) = watch::channel(false);
+    let mut proxy = tokio::spawn(proxy_stdio_monitor_io(
+        tokio::io::BufReader::new(tokio::io::stdin()),
+        tokio::io::stdout(),
+        tokio::io::BufReader::new(child_output),
+        child_input,
+        listener,
+        bridge_nonce(),
+        ready_tx,
+    ));
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            proxy.abort();
+            let _ = proxy.await;
+            anyhow::bail!("real Codex app-server exited before App initialization: {status}");
+        }
+        tokio::select! {
+            result = &mut proxy => {
+                let result = join_result(result, "stdio monitor proxy");
+                return finish_owned_child(&mut child, result).await;
+            }
+            changed = ready_rx.changed() => {
+                changed.context("App readiness channel closed before initialization")?;
+                if *ready_rx.borrow() {
+                    break;
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+    }
+
+    let marker = AppBridgeMarker {
+        version: APP_BRIDGE_MARKER_VERSION,
+        endpoint,
+        bridge_pid: std::process::id(),
+        server_pid,
+        real_codex: real_codex.to_path_buf(),
+    };
+    let marker_path = match write_marker_atomic(&marker_dir()?, &marker) {
+        Ok(path) => path,
+        Err(error) => {
+            proxy.abort();
+            let _ = proxy.await;
+            let _ = child.kill().await;
+            return Err(error);
+        }
+    };
+    let _marker_guard = MarkerGuard(marker_path);
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            proxy.abort();
+            let _ = proxy.await;
+            return Ok(status.code().unwrap_or(1));
+        }
+        tokio::select! {
+            result = &mut proxy => {
+                let result = join_result(result, "stdio monitor proxy");
+                return finish_owned_child(&mut child, result).await;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+    }
+}
+
+fn bridge_nonce() -> String {
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u32(std::process::id());
+    hasher.write_u128(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    );
+    format!("{:016x}", hasher.finish())
+}
+
+async fn finish_owned_child(
+    child: &mut tokio::process::Child,
+    proxy_result: anyhow::Result<()>,
+) -> anyhow::Result<i32> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            child.kill().await?;
+            break child.wait().await?;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    proxy_result?;
+    Ok(status.code().unwrap_or(0))
+}
 
 pub(super) async fn proxy_stdio_monitor_io<AR, AW, CR, CW>(
     app_input: AR,
@@ -283,7 +416,10 @@ async fn handle_monitor(
     clients: Clients,
     child_tx: mpsc::Sender<ChildWrite>,
 ) -> anyhow::Result<()> {
-    let websocket = accept_async(stream)
+    let websocket_config = WebSocketConfig::default()
+        .max_frame_size(None)
+        .max_message_size(None);
+    let websocket = accept_async_with_config(stream, Some(websocket_config))
         .await
         .context("monitor WebSocket handshake failed")?;
     let (mut sink, mut source) = websocket.split();
@@ -296,7 +432,12 @@ async fn handle_monitor(
                 Message::Text(text) => {
                     let parsed =
                         serde_json::from_str::<Value>(text.as_str()).unwrap_or(Value::Null);
-                    match router.lock().await.handle_monitor(connection_id, parsed) {
+                    let original_id = parsed.get("id").cloned().unwrap_or(Value::Null);
+                    let action = {
+                        let mut router = router.lock().await;
+                        router.handle_monitor(connection_id, parsed)
+                    };
+                    match action {
                         MonitorInput::Reply(reply) => {
                             if !send_to_client(
                                 &clients,
@@ -315,7 +456,7 @@ async fn handle_monitor(
                             {
                                 router.lock().await.cancel_forward(&forwarded);
                                 let error = json!({
-                                    "id": Value::Null,
+                                    "id": original_id,
                                     "error": {"code": -32003, "message": "monitor request queue is full"}
                                 });
                                 if !send_to_client(
@@ -523,6 +664,23 @@ mod tests {
             monitor_reply,
             json!({"id":2,"result":{"data":["thread-1"]}})
         );
+
+        let large_padding = "x".repeat((16 * 1024 * 1024) + 1);
+        monitor
+            .send(Message::Text(
+                json!({
+                    "id": 3,
+                    "method": "thread/read",
+                    "params": {"threadId":"thread-1","padding":large_padding}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        line.clear();
+        child_input.read_line(&mut line).await.unwrap();
+        assert!(line.len() > 16 * 1024 * 1024);
 
         let mut unexpected = String::new();
         assert!(tokio::time::timeout(

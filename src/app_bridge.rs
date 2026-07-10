@@ -2,14 +2,10 @@ use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
 
 use anyhow::Context;
-use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::process::{Child, Command};
-use tokio_tungstenite::tungstenite::{protocol::WebSocketConfig, Message};
+use tokio::process::Command;
 
 use crate::target::{Endpoint, EndpointCandidate};
 
@@ -22,6 +18,12 @@ pub const APP_BRIDGE_MARKER_VERSION: u32 = 1;
 pub enum InvocationKind {
     AppServer { command_index: usize },
     Passthrough,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum BridgeMode {
+    Passthrough,
+    StdioMonitor,
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
@@ -63,25 +65,12 @@ pub fn publishes_app_target_marker(args: &[OsString]) -> bool {
     has_code_mode_config && has_app_analytics_flag
 }
 
-pub fn rewrite_app_server_args(args: &[OsString], endpoint: &str) -> Vec<OsString> {
-    let mut rewritten = Vec::with_capacity(args.len() + 2);
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
-        if arg == OsStr::new("--listen") {
-            index += 2;
-            continue;
-        }
-        if arg.to_string_lossy().starts_with("--listen=") {
-            index += 1;
-            continue;
-        }
-        rewritten.push(arg.clone());
-        index += 1;
+fn bridge_mode(args: &[OsString]) -> BridgeMode {
+    if publishes_app_target_marker(args) {
+        BridgeMode::StdioMonitor
+    } else {
+        BridgeMode::Passthrough
     }
-    rewritten.push(OsString::from("--listen"));
-    rewritten.push(OsString::from(endpoint));
-    rewritten
 }
 
 pub fn real_codex_sources_from_env() -> RealCodexSources {
@@ -139,11 +128,9 @@ pub fn resolve_real_codex(
 pub async fn run_bridge(args: Vec<OsString>) -> anyhow::Result<i32> {
     let current_executable = std::env::current_exe()?;
     let real_codex = resolve_real_codex(&real_codex_sources_from_env(), &current_executable)?;
-    match invocation_kind(&args) {
-        InvocationKind::Passthrough => run_passthrough(&real_codex, &args).await,
-        InvocationKind::AppServer { .. } => {
-            run_app_server_bridge(&real_codex, &args, publishes_app_target_marker(&args)).await
-        }
+    match bridge_mode(&args) {
+        BridgeMode::Passthrough => run_passthrough(&real_codex, &args).await,
+        BridgeMode::StdioMonitor => stdio_monitor::run(&real_codex, &args).await,
     }
 }
 
@@ -159,80 +146,7 @@ async fn run_passthrough(real_codex: &Path, args: &[OsString]) -> anyhow::Result
     Ok(status.code().unwrap_or(1))
 }
 
-async fn run_app_server_bridge(
-    real_codex: &Path,
-    args: &[OsString],
-    publish_marker: bool,
-) -> anyhow::Result<i32> {
-    let port = pick_loopback_port().await?;
-    let endpoint = format!("ws://127.0.0.1:{port}");
-    let rewritten = rewrite_app_server_args(args, &endpoint);
-    let mut child = Command::new(real_codex)
-        .args(rewritten)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
-        .with_context(|| format!("failed to start real Codex {}", real_codex.display()))?;
-    let server_pid = child
-        .id()
-        .ok_or_else(|| anyhow::anyhow!("real Codex app-server has no process id"))?;
-
-    if let Err(error) = wait_for_server(&mut child, port).await {
-        let _ = child.kill().await;
-        return Err(error);
-    }
-
-    let _marker_guard = if publish_marker {
-        let marker = AppBridgeMarker {
-            version: APP_BRIDGE_MARKER_VERSION,
-            endpoint: endpoint.clone(),
-            bridge_pid: std::process::id(),
-            server_pid,
-            real_codex: real_codex.to_path_buf(),
-        };
-        let marker_path = write_marker_atomic(&marker_dir()?, &marker)?;
-        Some(MarkerGuard(marker_path))
-    } else {
-        None
-    };
-
-    let input = tokio::io::BufReader::new(tokio::io::stdin());
-    let output = tokio::io::stdout();
-    let proxy_result = proxy_jsonl_websocket_io(&endpoint, input, output).await;
-    let _ = child.kill().await;
-    proxy_result?;
-    Ok(0)
-}
-
-async fn pick_loopback_port() -> anyhow::Result<u16> {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-    Ok(port)
-}
-
-async fn wait_for_server(child: &mut Child, port: u16) -> anyhow::Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            anyhow::bail!("real Codex app-server exited before readiness: {status}");
-        }
-        if tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("real Codex app-server did not become ready on 127.0.0.1:{port}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-struct MarkerGuard(PathBuf);
+pub(super) struct MarkerGuard(pub(super) PathBuf);
 
 impl Drop for MarkerGuard {
     fn drop(&mut self) {
@@ -322,171 +236,12 @@ fn is_safe_loopback_endpoint(endpoint: &str) -> bool {
         && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
 }
 
-pub async fn proxy_jsonl_websocket_io<R, W>(
-    endpoint: &str,
-    mut input: R,
-    mut output: W,
-) -> anyhow::Result<()>
-where
-    R: AsyncBufRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    if !is_safe_loopback_endpoint(endpoint) {
-        anyhow::bail!("refusing unsafe Codex App bridge endpoint: {endpoint}");
-    }
-    // The App can request complete thread snapshots that exceed tungstenite's
-    // default 16 MiB frame and 64 MiB message limits. This is a transparent
-    // loopback proxy between two trusted Codex processes, so payload limits
-    // belong to the App and app-server rather than the bridge.
-    let websocket_config = WebSocketConfig::default()
-        .max_frame_size(None)
-        .max_message_size(None);
-    let (mut websocket, _) =
-        tokio_tungstenite::connect_async_with_config(endpoint, Some(websocket_config), false)
-            .await
-            .with_context(|| format!("failed to connect Codex App bridge to {endpoint}"))?;
-    let mut line = String::new();
-
-    loop {
-        line.clear();
-        tokio::select! {
-            read = input.read_line(&mut line) => {
-                let bytes = read?;
-                if bytes == 0 {
-                    let _ = websocket.close(None).await;
-                    break;
-                }
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                websocket.send(Message::Text(trimmed.to_owned().into())).await?;
-            }
-            incoming = websocket.next() => {
-                match incoming.transpose()? {
-                    Some(Message::Text(text)) => {
-                        output.write_all(text.as_bytes()).await?;
-                        output.write_all(b"\n").await?;
-                        output.flush().await?;
-                    }
-                    Some(Message::Binary(bytes)) => {
-                        output.write_all(&bytes).await?;
-                        output.write_all(b"\n").await?;
-                        output.flush().await?;
-                    }
-                    Some(Message::Ping(payload)) => {
-                        websocket.send(Message::Pong(payload)).await?;
-                    }
-                    Some(Message::Pong(_)) | Some(Message::Frame(_)) => {}
-                    Some(Message::Close(_)) | None => break,
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::{SinkExt, StreamExt};
     use std::collections::BTreeSet;
     use std::ffi::OsString;
     use std::path::PathBuf;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio_tungstenite::tungstenite::Message;
-
-    #[tokio::test]
-    async fn proxy_forwards_jsonl_and_websocket_messages_bidirectionally() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let message = websocket.next().await.unwrap().unwrap();
-            assert_eq!(
-                message.into_text().unwrap(),
-                r#"{"id":1,"method":"initialize"}"#
-            );
-            websocket
-                .send(Message::Text(r#"{"id":1,"result":{}}"#.into()))
-                .await
-                .unwrap();
-            websocket
-                .send(Message::Text(
-                    r#"{"id":"server-1","method":"item/tool/requestUserInput","params":{}}"#.into(),
-                ))
-                .await
-                .unwrap();
-            websocket.next().await;
-        });
-
-        let (test_io, bridge_io) = tokio::io::duplex(8192);
-        let (test_read, mut test_write) = tokio::io::split(test_io);
-        let (bridge_read, bridge_write) = tokio::io::split(bridge_io);
-        let proxy_endpoint = endpoint.clone();
-        let proxy = tokio::spawn(async move {
-            proxy_jsonl_websocket_io(&proxy_endpoint, BufReader::new(bridge_read), bridge_write)
-                .await
-        });
-
-        test_write
-            .write_all(b"{\"id\":1,\"method\":\"initialize\"}\n")
-            .await
-            .unwrap();
-        test_write.flush().await.unwrap();
-        let mut reader = BufReader::new(test_read);
-        let mut first = String::new();
-        let mut second = String::new();
-        reader.read_line(&mut first).await.unwrap();
-        reader.read_line(&mut second).await.unwrap();
-        assert_eq!(first.trim(), r#"{"id":1,"result":{}}"#);
-        assert!(second.contains("item/tool/requestUserInput"));
-
-        test_write.shutdown().await.unwrap();
-        proxy.await.unwrap().unwrap();
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn proxy_forwards_frames_larger_than_tungstenite_default_limit() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
-        let expected_payload_len = (16 * 1024 * 1024) + 1;
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let message = format!(
-                r#"{{"id":1,"result":{{"payload":"{}"}}}}"#,
-                "x".repeat(expected_payload_len)
-            );
-            websocket.send(Message::Text(message.into())).await.unwrap();
-            websocket.next().await;
-        });
-
-        let (test_io, bridge_io) = tokio::io::duplex(64 * 1024);
-        let (test_read, mut test_write) = tokio::io::split(test_io);
-        let (bridge_read, bridge_write) = tokio::io::split(bridge_io);
-        let proxy_endpoint = endpoint.clone();
-        let proxy = tokio::spawn(async move {
-            proxy_jsonl_websocket_io(&proxy_endpoint, BufReader::new(bridge_read), bridge_write)
-                .await
-        });
-
-        let mut reader = BufReader::new(test_read);
-        let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
-        assert!(line.len() > expected_payload_len);
-        assert!(line.ends_with("\n"));
-
-        test_write.shutdown().await.unwrap();
-        proxy.await.unwrap().unwrap();
-        server.await.unwrap();
-    }
 
     #[test]
     fn invocation_classifies_app_server_after_global_config_args() {
@@ -526,23 +281,24 @@ mod tests {
     }
 
     #[test]
-    fn invocation_rewrites_bridge_owned_listen_argument() {
-        let args = vec![
+    fn app_signature_selects_stdio_monitor_without_rewriting_args() {
+        let app_args = vec![
+            OsString::from("-c"),
+            OsString::from("features.code_mode_host=true"),
             OsString::from("app-server"),
-            OsString::from("--listen"),
-            OsString::from("stdio://"),
             OsString::from("--analytics-default-enabled"),
         ];
+        let generic = vec![
+            OsString::from("app-server"),
+            OsString::from("--listen"),
+            OsString::from("ws://127.0.0.1:45454"),
+        ];
 
-        assert_eq!(
-            rewrite_app_server_args(&args, "ws://127.0.0.1:45454"),
-            vec![
-                OsString::from("app-server"),
-                OsString::from("--analytics-default-enabled"),
-                OsString::from("--listen"),
-                OsString::from("ws://127.0.0.1:45454"),
-            ]
-        );
+        assert_eq!(bridge_mode(&app_args), BridgeMode::StdioMonitor);
+        assert_eq!(bridge_mode(&generic), BridgeMode::Passthrough);
+        assert!(!app_args
+            .iter()
+            .any(|argument| argument.to_string_lossy().starts_with("--listen")));
     }
 
     #[test]
@@ -621,6 +377,24 @@ mod tests {
         let decoded: AppBridgeMarker = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded, marker);
+    }
+
+    #[test]
+    fn marker_guard_removes_only_its_owned_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let owned = dir.path().join("app-target.1.json");
+        let unrelated = dir.path().join("app-target.2.json");
+        std::fs::write(&owned, b"owned").unwrap();
+        std::fs::write(&unrelated, b"unrelated").unwrap();
+
+        {
+            let _guard = MarkerGuard(owned.clone());
+            assert!(owned.is_file());
+            assert!(unrelated.is_file());
+        }
+
+        assert!(!owned.exists());
+        assert!(unrelated.is_file());
     }
 
     #[test]
