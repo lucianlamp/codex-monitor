@@ -594,6 +594,7 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_app_target_directs_delivery_to_native_shortcuts() {
         let error = select_windows_app_endpoint(Vec::new()).unwrap_err();
