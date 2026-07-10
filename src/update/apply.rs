@@ -6,11 +6,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ApplySummary {
     pub changed: usize,
     pub removed: usize,
     pub unchanged: usize,
+    pub deferred_cleanup: Option<PathBuf>,
 }
 
 struct PreparedOperation {
@@ -131,6 +132,7 @@ where
             changed,
             removed,
             unchanged,
+            deferred_cleanup: None,
         });
     }
 
@@ -187,17 +189,52 @@ where
     }
 
     cleanup_prepared(&operations);
-    std::fs::remove_dir_all(&backup_root).with_context(|| {
+    let cleanup_marker = backup_root.join(".cleanup-ready");
+    std::fs::write(&cleanup_marker, b"verified update backup\n").with_context(|| {
         format!(
-            "update succeeded but backup cleanup failed: {}",
-            backup_root.display()
+            "update succeeded but cleanup marker creation failed: {}",
+            cleanup_marker.display()
         )
     })?;
+    let deferred_cleanup = match std::fs::remove_dir_all(&backup_root) {
+        Ok(()) => None,
+        Err(_) => Some(backup_root),
+    };
     Ok(ApplySummary {
         changed,
         removed,
         unchanged,
+        deferred_cleanup,
     })
+}
+
+pub fn cleanup_ready_backups(install_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    if !install_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut remaining = Vec::new();
+    for entry in std::fs::read_dir(install_root).with_context(|| {
+        format!(
+            "failed to inspect codex-monitor install root {}",
+            install_root.display()
+        )
+    })? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !file_type.is_dir() || !name.starts_with(".update-backup-") {
+            continue;
+        }
+        let path = entry.path();
+        if !path.join(".cleanup-ready").is_file() {
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_err() {
+            remaining.push(path);
+        }
+    }
+    Ok(remaining)
 }
 
 fn verify_installed_state(manifest: &UpdateManifest) -> anyhow::Result<()> {
@@ -433,5 +470,21 @@ mod tests {
             Some("broken")
         );
         assert_eq!(take_previous_failure(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn cleanup_removes_only_verified_backup_directories() {
+        let temp = TempDir::new().unwrap();
+        let ready = temp.path().join(".update-backup-ready");
+        let unverified = temp.path().join(".update-backup-unverified");
+        std::fs::create_dir(&ready).unwrap();
+        std::fs::create_dir(&unverified).unwrap();
+        std::fs::write(ready.join(".cleanup-ready"), b"verified").unwrap();
+        std::fs::write(ready.join("old.exe"), b"old").unwrap();
+        std::fs::write(unverified.join("old.exe"), b"recoverable").unwrap();
+
+        assert!(cleanup_ready_backups(temp.path()).unwrap().is_empty());
+        assert!(!ready.exists());
+        assert!(unverified.exists());
     }
 }

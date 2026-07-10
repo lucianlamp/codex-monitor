@@ -35,6 +35,7 @@ pub fn report_previous_failure() -> Result<()> {
     #[cfg(windows)]
     {
         let paths = windows::install_paths()?;
+        let _ = apply::cleanup_ready_backups(&paths.root)?;
         if let Some(message) = apply::take_previous_failure(&paths.update_result)? {
             eprintln!("Previous codex-monitor update failed: {message}");
         }
@@ -156,8 +157,15 @@ fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
                 version: RESULT_VERSION,
                 success: true,
                 message: format!(
-                    "updated {} files, removed {} obsolete files, left {} identical files",
-                    summary.changed, summary.removed, summary.unchanged
+                    "updated {} files, removed {} obsolete files, left {} identical files{}",
+                    summary.changed,
+                    summary.removed,
+                    summary.unchanged,
+                    if summary.deferred_cleanup.is_some() {
+                        "; old running executable cleanup is deferred"
+                    } else {
+                        ""
+                    }
                 ),
             },
         )?;
@@ -178,6 +186,12 @@ fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
                 "codex-monitor update complete: {} updated, {} removed, {} unchanged. Reopen Codex App.",
                 summary.changed, summary.removed, summary.unchanged
             );
+            if let Some(path) = summary.deferred_cleanup {
+                println!(
+                    "Old running executable backup will be removed after its watcher exits: {}",
+                    path.display()
+                );
+            }
             Ok(0)
         }
         Err(error) => {
