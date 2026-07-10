@@ -1,7 +1,7 @@
 # Codex Monitor Reconnect and Steer Delivery Design
 
 **Date:** 2026-07-10  
-**Status:** Drift guard accepted; pinned-App endpoint ordering pending repeat live restart
+**Status:** Implemented and accepted by live Windows App restart test
 
 ## Context
 
@@ -102,13 +102,11 @@ this approach is rejected.
 `run_monitor_watch` keeps an immutable copy of the requested logical endpoint,
 thread id, and cwd. A session setup function performs these steps each time:
 
-1. Resolve the logical endpoint and requested thread. For a pinned `app`
-   target, select the current unique App bridge without requiring the thread to
-   appear in its loaded list first; other target kinds keep their existing
-   loaded-thread selection.
-2. Open the transport.
-3. Send `initialize` and `initialized`.
-4. Confirm that the target thread is loaded without calling `thread/resume`.
+1. Resolve the logical endpoint to the current concrete endpoint.
+2. Resolve or validate the pinned thread on that endpoint.
+3. Open the transport.
+4. Send `initialize` and `initialized`.
+5. Confirm that the target thread is loaded without calling `thread/resume`.
 
 If setup fails, the watcher logs one concise reconnect message, waits two
 seconds, and retries. It does not advance source state.
@@ -118,8 +116,7 @@ seconds, and retries. It does not advance source state.
 After source polling returns at least one pending event, but before formatting
 or sending that event, the watcher re-resolves dynamic logical targets:
 
-- `app` resolves the currently live App bridge endpoint before validating a
-  pinned thread on that replacement connection;
+- `app` resolves the currently live App bridge endpoint;
 - `auto` repeats loaded-thread selection for the requested thread or cwd;
 - `explicit` and `managed` keep their existing session without an additional
   probe.

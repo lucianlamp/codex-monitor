@@ -173,28 +173,6 @@ unique token reaches the current model turn
 
 Only after these checks may the drift fix be considered complete and PR #7 be marked Ready.
 
-### Task 3: Resolve the current App bridge before verifying a pinned thread
-
-**Files:**
-- Modify: `src/delivery.rs`
-- Test: `src/delivery.rs`
-
-- [x] **Step 1: Add a failing pinned-App resolution test**
-
-Add a focused unit test proving that `Endpoint::App` plus an explicit thread resolves the current unique App bridge before checking loaded state, while `Auto`, `Managed`, `Explicit`, and App-without-thread continue through loaded-thread resolution.
-
-- [x] **Step 2: Verify the new test is red**
-
-Run the exact focused test and require it to fail because the monitor-specific pinned-App resolution branch does not exist.
-
-- [x] **Step 3: Resolve the App bridge before requiring loaded state**
-
-For live monitor session setup and dynamic revalidation only, resolve `--target app --thread <id>` to the current App bridge and retain the requested thread. Open the bridge first, then use the existing `ensure_thread_loaded` call to verify the pinned thread without calling `thread/resume`. Keep `auto`, `managed`, and explicit endpoint behavior unchanged.
-
-- [ ] **Step 4: Verify, install, and repeat the live restart acceptance**
-
-Run focused tests and the complete Rust verification suite, rebuild release binaries, reinstall only the changed codex-monitor executables, restart only the authorized `cdxm/codex` watcher, then repeat Task 2 Step 5. The event must remain pending until the new bridge accepts it, and the same watcher PID must survive the App restart.
-
 Accepted on 2026-07-10 with watcher PID `51852`, old live endpoint `56473`, new
 App bridge endpoint `51712`, event/state id `7356`, and token
 `[cdxm-driftguard-live-20260710-184102]` received in the current model turn.
