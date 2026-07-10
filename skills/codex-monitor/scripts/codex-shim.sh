@@ -29,16 +29,38 @@ is_codex_shim() {
   esac
 }
 
+# The Windows desktop install keeps a standalone Codex CLI under
+# %LOCALAPPDATA%/OpenAI/Codex/bin. That copy can lag behind a package-manager
+# CLI on PATH, so retain it only as a fallback instead of selecting it before
+# npm/Homebrew/etc. An explicit CODEX_MONITOR_REAL_CODEX still wins above all
+# automatic discovery.
+is_desktop_codex_candidate() {
+  local candidate="$1"
+  local desktop_bin desktop_dir
+  [ -n "${LOCALAPPDATA:-}" ] || return 1
+  desktop_bin="$LOCALAPPDATA/OpenAI/Codex/bin"
+  case "$desktop_bin" in
+    [A-Za-z]:\\*|[A-Za-z]:/*)
+      if command -v cygpath >/dev/null 2>&1; then
+        desktop_bin="$(cygpath -u "$desktop_bin")"
+      fi
+      ;;
+  esac
+  desktop_dir="$(cd "$desktop_bin" 2>/dev/null && pwd || true)"
+  [ -n "$desktop_dir" ] && [ "$(dirname "$candidate")" = "$desktop_dir" ]
+}
+
 resolve_real_codex() {
   if [ -n "${CODEX_MONITOR_REAL_CODEX:-}" ]; then
     printf '%s\n' "$CODEX_MONITOR_REAL_CODEX"
     return 0
   fi
 
-  local self_dir self_path shim_target old_ifs path_dir candidate candidate_dir candidate_path
+  local self_dir self_path shim_target old_ifs path_dir candidate candidate_dir candidate_path desktop_fallback
   self_dir="$(cd "$(dirname "$0")" && pwd)"
   self_path="$self_dir/$(basename "$0")"
   shim_target="${CODEX_MONITOR_SHIM_TARGET:-$self_path}"
+  desktop_fallback=""
 
   old_ifs="$IFS"
   IFS=:
@@ -52,13 +74,22 @@ resolve_real_codex() {
       candidate_path="$candidate_dir/$(basename "$candidate")"
       if [ "$candidate_path" != "$self_path" ] && [ "$candidate_path" != "$shim_target" ] \
         && ! is_codex_shim "$candidate_path"; then
-        printf '%s\n' "$candidate_path"
-        return 0
+        if is_desktop_codex_candidate "$candidate_path"; then
+          [ -n "$desktop_fallback" ] || desktop_fallback="$candidate_path"
+        else
+          printf '%s\n' "$candidate_path"
+          return 0
+        fi
       fi
     fi
     IFS=:
   done
   IFS="$old_ifs"
+
+  if [ -n "$desktop_fallback" ]; then
+    printf '%s\n' "$desktop_fallback"
+    return 0
+  fi
 
   echo "codex-monitor shim: real codex not found on PATH" >&2
   return 1
