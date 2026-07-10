@@ -24,7 +24,7 @@ usage() {
 Usage: install.sh [options]
 
 Installs codex-monitor for daily use:
-  - cdxm and codex-monitor binaries under ~/.codex-monitor/bin
+  - native codex-monitor and a cdxm compatibility launcher under ~/.codex-monitor/bin
   - the Codex skill under ~/.codex/skills/codex-monitor
   - an optional Codex CLI shim at ~/.agents/bin/codex
 
@@ -353,7 +353,7 @@ echo "binary root: $INSTALL_ROOT"
 echo "skill dir: $SKILL_DIR"
 echo "codex shim target: $SHIM_TARGET"
 
-if prompt_yes_no "Install cdxm and codex-monitor binaries to $BIN_DIR?" y; then
+if prompt_yes_no "Install codex-monitor and the cdxm compatibility launcher to $BIN_DIR?" y; then
   install_binaries
 else
   echo "Skipped binary install."

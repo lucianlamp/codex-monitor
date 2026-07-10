@@ -172,7 +172,7 @@ cdxm --help
 If the repo was just edited, reinstall from the checkout:
 
 ```bash
-cargo install --path . --bins --force --debug
+cargo install --path . --bin codex-monitor --force --debug
 ```
 
 On Windows native PowerShell, install from the checkout with:
@@ -197,17 +197,19 @@ Run the updater from any directory:
 codex-monitor update
 ```
 
-This updates `codex-monitor.exe` and `cdxm.exe` from a checksum-verified Windows
-release, preserves an unowned or explicitly native `CODEX_CLI_PATH`, and
+This updates the single native `codex-monitor.exe` from a checksum-verified
+Windows release, refreshes the `cdxm.cmd` compatibility launcher, preserves an
+unowned or explicitly native `CODEX_CLI_PATH`, and
 migrates a proven-owned legacy bridge back to its saved environment. A native
 App does not need to be closed. When `CODEX_CLI_PATH` is already native or
 otherwise unowned, the updater installs the public binaries and defers cleanup
 of active orphaned legacy runtime files until a later update. It removes only
 inactive fixed legacy paths. If an owned legacy bridge is still active, the
 updater asks the user to quit App because restoring that owned environment is
-the migration itself. An active public `cdxm.exe` or `codex-monitor.exe` is
-left at its current version while the other public binary and skill can still
-be installed; a later update replaces the deferred file. It never stops a process. The updater does not manage
+the migration itself. An active legacy `cdxm.exe` is left running and its fixed
+file is removed by a later update after the consumer exits. New `cdxm` commands
+already resolve through `cdxm.cmd` to `codex-monitor.exe`. It never stops a
+process. The updater does not manage
 foreground waits, heartbeat automations, watchers, or CLI consumers.
 
 On Windows, `--target app` is intentionally unavailable because native App does

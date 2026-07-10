@@ -7,7 +7,8 @@
 `codex-monitor` is a local-first monitor for delivering external events into
 the Codex App / Codex app-server control plane.
 
-The preferred short alias binary is `cdxm`.
+The preferred short command is `cdxm`. It is a compatibility launcher for the
+single native `codex-monitor` executable, not a second compiled binary.
 
 ## Install for daily use
 
@@ -27,7 +28,8 @@ requires Rust and Cargo.
 
 The installer asks before each user-visible step:
 
-- install `cdxm` and `codex-monitor` under `$HOME/.codex-monitor/bin`
+- install native `codex-monitor` and the `cdxm` compatibility launcher under
+  `$HOME/.codex-monitor/bin`
 - install the Codex skill under `$HOME/.codex/skills/codex-monitor`
 - optionally install a Codex CLI shim at `$HOME/.agents/bin/codex`
 - add `$HOME/.codex-monitor/bin` and `$HOME/.agents/bin` to PATH in `~/.zshrc`
@@ -49,9 +51,9 @@ From this repository, the equivalent local install is:
 ### Windows native PowerShell
 
 Windows is supported with a native PowerShell installer (no WSL). The
-`cdxm`/`codex-monitor` binaries are native; the optional Codex shim runs the
-same bash shim used on macOS/Linux through Git Bash, so installing that shim
-requires Git Bash:
+`codex-monitor.exe` is native; `cdxm.cmd` is a compatibility launcher. The
+optional Codex shim runs the same bash shim used on macOS/Linux through Git
+Bash, so installing that shim requires Git Bash:
 
 ```powershell
 iwr https://raw.githubusercontent.com/lucianlamp/codex-monitor/main/install.ps1 -UseBasicParsing | iex
@@ -71,8 +73,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 The Windows installer asks before each user-visible step:
 
-- install `cdxm.exe` and `codex-monitor.exe` under
-  `%USERPROFILE%\.codex-monitor\bin`
+- install native `codex-monitor.exe` under `%USERPROFILE%\.codex-monitor\bin`
+- install the `cdxm.cmd` compatibility launcher under
+  `%USERPROFILE%\.agents\bin`
 - install the Codex skill under
   `%USERPROFILE%\.codex\skills\codex-monitor`
 - optionally install a Codex CLI shim at `%USERPROFILE%\.agents\bin\codex.cmd`
@@ -122,11 +125,12 @@ Run updates from any directory:
 codex-monitor update
 ```
 
-The command verifies the latest release checksum and updates only
-`codex-monitor.exe` and `cdxm.exe`. It preserves an explicit native or otherwise
-unowned `CODEX_CLI_PATH`. A proven-owned legacy bridge is restored to its saved
-environment and its fixed installed files are removed after they are unused.
-The updater never stops App, a watcher, or a CLI process.
+The command verifies the latest release checksum and updates the single native
+`codex-monitor.exe`. It refreshes `cdxm.cmd`, preserves an explicit native or
+otherwise unowned `CODEX_CLI_PATH`, and restores a proven-owned legacy bridge
+to its saved environment. A running legacy `cdxm.exe` remains untouched until
+a later update after its consumer exits. The updater never stops App, a watcher,
+or a CLI process.
 
 On Windows, `--target app` is intentionally unavailable because native App has
 no safe external injection endpoint. Use the three skill shortcuts for App
@@ -135,24 +139,25 @@ delivery. The CLI shim and its app-server endpoint remain independent.
 For development-only binary refresh:
 
 ```bash
-cargo install --path . --bins --force --debug
+cargo install --path . --bin codex-monitor --force --debug
 ```
 
-This installs `codex-monitor` and `cdxm` into Cargo's bin directory, usually:
+This installs only the native executable into Cargo's bin directory, usually:
 
 ```text
-$HOME/.cargo/bin/cdxm
+$HOME/.cargo/bin/codex-monitor
 ```
 
 Confirm it is available:
 
 ```bash
-command -v cdxm
-cdxm --help
+command -v codex-monitor
+codex-monitor --help
 ```
 
-If `command -v cdxm` prints nothing, add Cargo's bin directory to your shell
-PATH:
+If `command -v codex-monitor` prints nothing, add Cargo's bin directory to your
+shell PATH. Use `install.sh` or `install.ps1` instead when the `cdxm`
+compatibility command is desired.
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"

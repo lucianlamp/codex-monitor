@@ -111,6 +111,12 @@ cdxm --target app remote connect
 
 ## Runtime Facts
 
+- `codex-monitor` is the only native executable. `cdxm` is a compatibility
+  launcher that forwards to it; on Windows the launcher is
+  `%USERPROFILE%\.agents\bin\cdxm.cmd`.
+- A running legacy Windows `cdxm.exe` is never stopped by installation or
+  update. New invocations use the earlier PATH launcher, and the fixed old EXE
+  is removed only after its consumer exits.
 - Codex Monitor core is source-agnostic: thread detection resolves loaded Codex threads,
   source adapters poll/format events, and delivery advances cursor state only
   after app-server acknowledgement.

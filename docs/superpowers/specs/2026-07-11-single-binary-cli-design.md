@@ -46,7 +46,7 @@ resolves its own directory and executes the sibling `codex-monitor`. Source
 installation uses `cargo install --bin codex-monitor` and writes the same
 launcher.
 
-The Windows installer publishes only `codex-monitor.exe`, then atomically writes
+The Windows installer publishes only `codex-monitor.exe`, then writes via a temporary file
 `%USERPROFILE%\.agents\bin\cdxm.cmd` with an absolute invocation of
 `%USERPROFILE%\.codex-monitor\bin\codex-monitor.exe`. It keeps the existing PATH
 order so new `cdxm` commands resolve to the CMD launcher even while a legacy

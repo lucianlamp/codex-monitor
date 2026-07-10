@@ -252,7 +252,8 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("$codex-monitor off"));
     assert!(readme.contains("signed native"));
     assert!(readme.contains("codex-monitor update"));
-    assert!(readme.contains("updates only"));
+    assert!(readme.contains("single native"));
+    assert!(readme.contains("cdxm.cmd"));
     assert!(!readme.contains("-InstallAppBridge"));
     assert!(!readme.contains("-RemoveAppBridge"));
     assert!(!readme.contains("codex-app-bridge"));
