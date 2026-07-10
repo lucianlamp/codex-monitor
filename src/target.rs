@@ -83,12 +83,12 @@ pub fn resolve_app_endpoint(endpoint: Endpoint) -> anyhow::Result<Endpoint> {
 fn select_windows_app_endpoint(candidates: Vec<EndpointCandidate>) -> anyhow::Result<Endpoint> {
     let app_endpoints = candidates
         .into_iter()
-        .filter(|candidate| candidate.source == "codex-app-server-process")
+        .filter(|candidate| candidate.source == "codex-app-bridge")
         .collect::<Vec<_>>();
 
     match app_endpoints.as_slice() {
         [] => bail!(
-            "no live Codex App endpoint found on Windows; open Codex App and a project task, then retry"
+            "no live Codex App bridge endpoint found on Windows; enable the app bridge, restart Codex App, and retry"
         ),
         [candidate] => Ok(candidate.endpoint.clone()),
         many => {
@@ -98,7 +98,7 @@ fn select_windows_app_endpoint(candidates: Vec<EndpointCandidate>) -> anyhow::Re
                 .collect::<Vec<_>>()
                 .join(", ");
             bail!(
-                "multiple live Codex App endpoints found on Windows; pass --endpoint explicitly: {choices}"
+                "multiple live Codex App bridge endpoints found on Windows; pass --endpoint explicitly: {choices}"
             )
         }
     }
@@ -160,13 +160,23 @@ fn push_candidate(
     let label = endpoint_label(&endpoint);
     if seen.insert(label.clone()) {
         candidates.push(EndpointCandidate { endpoint, source });
-    } else if source == "codex-app-server-process" {
+    } else if source_priority(&source) > 0 {
         if let Some(candidate) = candidates
             .iter_mut()
             .find(|candidate| endpoint_label(&candidate.endpoint) == label)
         {
-            candidate.source = source;
+            if source_priority(&source) > source_priority(&candidate.source) {
+                candidate.source = source;
+            }
         }
+    }
+}
+
+fn source_priority(source: &str) -> u8 {
+    match source {
+        "codex-app-bridge" => 2,
+        "codex-app-server-process" => 1,
+        _ => 0,
     }
 }
 
@@ -228,9 +238,20 @@ if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
         .output();
     match output {
         Ok(output) if output.status.success() => {
-            discover_windows_endpoint_candidates_from_inventory_text(&String::from_utf8_lossy(
-                &output.stdout,
-            ))
+            let mut candidates = discover_windows_endpoint_candidates_from_inventory_text(
+                &String::from_utf8_lossy(&output.stdout),
+            );
+            let live_endpoints = candidates
+                .iter()
+                .map(|candidate| endpoint_label(&candidate.endpoint))
+                .collect::<BTreeSet<_>>();
+            if let Ok(dir) = crate::app_bridge::marker_dir() {
+                let mut seen = live_endpoints.clone();
+                for marker in crate::app_bridge::read_marker_candidates(&dir, &live_endpoints) {
+                    push_candidate(&mut candidates, &mut seen, marker.endpoint, marker.source);
+                }
+            }
+            candidates
         }
         _ => Vec::new(),
     }
@@ -566,15 +587,15 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
     }
 
     #[test]
-    fn windows_app_endpoint_selects_single_app_server_candidate() {
+    fn windows_app_target_selects_single_bridge_candidate() {
         let candidates = vec![
             EndpointCandidate {
                 endpoint: Endpoint::Explicit("ws://127.0.0.1:54014".into()),
-                source: "codex-cli-remote".into(),
+                source: "codex-app-server-process".into(),
             },
             EndpointCandidate {
                 endpoint: Endpoint::Explicit("ws://127.0.0.1:54015".into()),
-                source: "codex-app-server-process".into(),
+                source: "codex-app-bridge".into(),
             },
         ];
 
@@ -585,7 +606,7 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
     }
 
     #[test]
-    fn duplicate_endpoint_prefers_app_server_source() {
+    fn duplicate_endpoint_prefers_app_bridge_source() {
         let endpoint = Endpoint::Explicit("ws://127.0.0.1:54015".into());
         let mut candidates = Vec::new();
         let mut seen = BTreeSet::new();
@@ -600,43 +621,43 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
             &mut candidates,
             &mut seen,
             endpoint,
-            "codex-app-server-process".into(),
+            "codex-app-bridge".into(),
         );
 
         assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].source, "codex-app-server-process");
+        assert_eq!(candidates[0].source, "codex-app-bridge");
     }
 
     #[test]
-    fn windows_app_endpoint_rejects_missing_app_server_candidate() {
+    fn windows_app_target_rejects_ordinary_app_server_process() {
         let error = select_windows_app_endpoint(vec![EndpointCandidate {
             endpoint: Endpoint::Explicit("ws://127.0.0.1:54014".into()),
-            source: "codex-cli-remote".into(),
+            source: "codex-app-server-process".into(),
         }])
         .unwrap_err();
 
         assert!(error
             .to_string()
-            .contains("no live Codex App endpoint found"));
+            .contains("no live Codex App bridge endpoint found"));
     }
 
     #[test]
-    fn windows_app_endpoint_rejects_ambiguous_app_servers() {
+    fn windows_app_target_rejects_ambiguous_bridges() {
         let error = select_windows_app_endpoint(vec![
             EndpointCandidate {
                 endpoint: Endpoint::Explicit("ws://127.0.0.1:54015".into()),
-                source: "codex-app-server-process".into(),
+                source: "codex-app-bridge".into(),
             },
             EndpointCandidate {
                 endpoint: Endpoint::Explicit("ws://127.0.0.1:54016".into()),
-                source: "codex-app-server-process".into(),
+                source: "codex-app-bridge".into(),
             },
         ])
         .unwrap_err();
 
         assert!(error
             .to_string()
-            .contains("multiple live Codex App endpoints found"));
+            .contains("multiple live Codex App bridge endpoints found"));
     }
 
     #[test]
