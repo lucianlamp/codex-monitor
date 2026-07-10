@@ -1,7 +1,7 @@
 # Codex Monitor Reconnect and Steer Delivery Design
 
 **Date:** 2026-07-10  
-**Status:** Implemented on feature branch
+**Status:** Endpoint-drift revision approved; implementation pending
 
 ## Context
 
@@ -10,6 +10,14 @@ App endpoint, opens one app-server connection, and exits on the first delivery
 error. Restarting Codex App changes the bridge endpoint. A watcher that remains
 attached to an older app-server can then receive `thread not found` and exit,
 leaving later agmsg events without a consumer.
+
+Live restart testing exposed a second stale-session case: the previous App
+bridge can exit while its child app-server remains alive. That orphan server
+continues accepting `thread/read` and `turn/steer`, so transport-error-only
+reconnect logic can accept an acknowledgement from the old endpoint, advance
+state, and never deliver the input to the newly opened Codex App. Endpoint
+`60498` produced this false acknowledgement after the current App moved to
+`56473`.
 
 The feature branch already:
 
@@ -53,6 +61,8 @@ References:
    defaults.
 7. Stop cleanly on Ctrl+C without managing unrelated watchers or Codex
    processes.
+8. Reject acknowledgements from a formerly selected dynamic endpoint after the
+   logical `app` or `auto` target has moved elsewhere.
 
 ## Non-goals
 
@@ -61,6 +71,8 @@ References:
 - Using `thread/inject_items` as the normal delivery path.
 - Restarting Codex App, Codex CLI, or other monitor processes.
 - Treating app-server acknowledgement as proof of a specific UI rendering.
+- Polling dynamic endpoint discovery continuously when no source event is
+  pending.
 
 ## Alternatives Considered
 
@@ -99,19 +111,42 @@ thread id, and cwd. A session setup function performs these steps each time:
 If setup fails, the watcher logs one concise reconnect message, waits two
 seconds, and retries. It does not advance source state.
 
+### Dynamic endpoint drift guard
+
+After source polling returns at least one pending event, but before formatting
+or sending that event, the watcher re-resolves dynamic logical targets:
+
+- `app` resolves the currently live App bridge endpoint;
+- `auto` repeats loaded-thread selection for the requested thread or cwd;
+- `explicit` and `managed` keep their existing session without an additional
+  probe.
+
+The resolved endpoint and thread are compared with the connected session. If
+either differs, or dynamic resolution fails, the watcher closes the old
+session and returns to the outer reconnect loop without sending the event and
+without advancing state. The next session connects to the newly resolved
+target, polls from the unchanged cursor, and retries the same event.
+
+This check runs only when an event is pending. A two-second discovery heartbeat
+would add repeated app-server probes while idle without improving delivery
+correctness, and directly watching Windows marker files would not cover `auto`
+or other platforms.
+
 ### Delivery loop
 
 For each source event after the saved cursor:
 
-1. Format the event once.
-2. In `auto` mode, inspect the active turn and call
+1. Revalidate a dynamic logical target before any app-server delivery call.
+2. If the target drifted, reconnect without sending or advancing state.
+3. Format the event once.
+4. In `auto` mode, inspect the active turn and call
    `turn_start_or_steer`:
    - active turn: attempt `turn/steer`;
    - no active turn: call `turn/start`;
    - if the active turn ends between inspection and steering, retain the
      existing fallback from failed steer to `turn/start`.
-3. On acknowledgement, persist the event cursor atomically.
-4. On transport closure, stale endpoint, `thread not found`, oversized-frame
+5. On acknowledgement, persist the event cursor atomically.
+6. On transport closure, stale endpoint, `thread not found`, oversized-frame
    error, or another app-server delivery failure, close the session, reconnect,
    and retry the same event.
 
@@ -147,16 +182,22 @@ Automated coverage must prove:
 4. Ctrl+C can end reconnect backoff without waiting for another successful
    connection.
 5. Existing dry-run behavior remains one-shot and non-mutating.
+6. A still-responsive old endpoint receives no delivery request after dynamic
+   target resolution returns a different endpoint; state advances only after
+   the replacement endpoint acknowledges the retried event.
 
 The live Windows acceptance test is:
 
 1. Start one `--target app` agmsg watcher pinned to the current thread.
-2. Restart Codex App without stopping the watcher.
-3. While a turn is active, send a unique agmsg message to the watcher identity.
-4. Confirm that the running watcher PID survives, resolves the new
+2. Record the watcher PID and current `codex-app-bridge` endpoint.
+3. Restart Codex App without stopping the watcher and confirm the App publishes
+   a different bridge endpoint while the old app-server may remain alive.
+4. While a turn is active, send a unique agmsg message to the watcher identity.
+5. Confirm that the running watcher PID survives, rejects the old endpoint,
+   resolves the new
    `codex-app-bridge` endpoint, receives a `turn/steer` acknowledgement, and
    advances the agmsg state exactly once.
-5. Confirm from the current model turn that the unique message text was
+6. Confirm from the current model turn that the unique message text was
    received. A separate visible App bubble is not required for this active-turn
    case.
 
