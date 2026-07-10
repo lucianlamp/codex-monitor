@@ -1127,7 +1127,7 @@ fn write_agmsg_fixture_db(path: &Path, team: &str, name: &str) {
 #[tokio::test(flavor = "multi_thread")]
 async fn threads_command_lists_fake_thread() {
     let url = start_fake_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args(["--endpoint", &url, "threads", "--cwd", "/tmp/project"])
         .output()
         .unwrap();
@@ -1140,7 +1140,7 @@ async fn threads_command_lists_fake_thread() {
 #[tokio::test(flavor = "multi_thread")]
 async fn loaded_command_lists_loaded_thread_ids() {
     let url = start_fake_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args(["--endpoint", &url, "loaded"])
         .output()
         .unwrap();
@@ -1157,7 +1157,7 @@ async fn loaded_command_lists_loaded_thread_ids() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_status_prints_current_remote_control_state() {
     let url = start_fake_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args(["--endpoint", &url, "remote", "status"])
         .output()
         .unwrap();
@@ -1175,7 +1175,7 @@ async fn remote_status_prints_current_remote_control_state() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_enable_uses_unit_params_for_current_daemon_contract() {
     let url = start_fake_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args(["--endpoint", &url, "remote", "enable"])
         .output()
         .unwrap();
@@ -1192,7 +1192,7 @@ async fn remote_enable_uses_unit_params_for_current_daemon_contract() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_clients_uses_status_environment_when_not_provided() {
     let url = start_fake_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args(["--endpoint", &url, "remote", "clients"])
         .output()
         .unwrap();
@@ -1210,7 +1210,7 @@ async fn remote_clients_uses_status_environment_when_not_provided() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_monitor_prints_status_and_clients_once() {
     let url = start_fake_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &url,
@@ -1237,7 +1237,7 @@ async fn remote_monitor_prints_status_and_clients_once() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_pair_start_can_request_manual_pairing_code() {
     let url = start_fake_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args(["--endpoint", &url, "remote", "pair-start", "--manual-code"])
         .output()
         .unwrap();
@@ -1284,7 +1284,7 @@ async fn remote_claim_pairs_existing_enrolled_client_without_phone_input() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &app_server_url,
@@ -1313,7 +1313,7 @@ async fn remote_claim_pairs_existing_enrolled_client_without_phone_input() {
 #[tokio::test(flavor = "multi_thread")]
 async fn send_defaults_to_steer_when_loaded_thread_has_active_turn() {
     let url = start_fake_active_turn_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &url,
@@ -1335,7 +1335,7 @@ async fn send_defaults_to_steer_when_loaded_thread_has_active_turn() {
 #[tokio::test(flavor = "multi_thread")]
 async fn send_returns_after_turn_start_ack_by_default() {
     let url = start_fake_idle_ack_only_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &url,
@@ -1357,7 +1357,7 @@ async fn send_returns_after_turn_start_ack_by_default() {
 #[tokio::test(flavor = "multi_thread")]
 async fn send_resolves_loaded_thread_from_cwd_when_thread_is_omitted() {
     let url = start_fake_idle_ack_only_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &url,
@@ -1383,7 +1383,7 @@ async fn agmsg_watch_dry_run_prints_delivery_plan_without_sending_turn() {
     let db_path = dir.path().join("messages.db");
     write_agmsg_fixture_db(&db_path, "dryrun-team", "target");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .env("HOME", dir.path())
         .args([
             "--endpoint",
@@ -1426,7 +1426,7 @@ async fn monitor_watch_agmsg_dry_run_uses_agmsg_adapter() {
     let db_path = dir.path().join("messages.db");
     write_agmsg_fixture_db(&db_path, "dryrun-team", "target");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .env("HOME", dir.path())
         .args([
             "--endpoint",
@@ -1475,7 +1475,7 @@ async fn monitor_watch_reconnects_and_retries_unacknowledged_event() {
     let local_app_data = dir.path().join("localappdata");
     std::fs::create_dir_all(&local_app_data).unwrap();
 
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .env("HOME", dir.path())
         .env("LOCALAPPDATA", &local_app_data)
         .env("XDG_STATE_HOME", dir.path().join("state"))
@@ -1538,7 +1538,7 @@ async fn monitor_watch_dry_run_rejects_unloaded_explicit_thread() {
     let db_path = dir.path().join("messages.db");
     write_agmsg_fixture_db(&db_path, "dryrun-team", "target");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .env("HOME", dir.path())
         .args([
             "--endpoint",
@@ -1579,7 +1579,7 @@ async fn remote_doctor_reports_all_surfaces() {
     let signer_file = dir.path().join("fake-device-key.js");
     write_device_key_module(&signer_file, false);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &app_server_url,
@@ -1621,7 +1621,7 @@ async fn remote_doctor_keeps_going_when_device_key_missing() {
     let signer_file = dir.path().join("missing-device-key.js");
     write_device_key_module(&signer_file, true);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &app_server_url,
@@ -1660,7 +1660,7 @@ async fn remote_connect_explains_missing_device_key_repair() {
     let signer_file = dir.path().join("missing-device-key.js");
     write_device_key_module(&signer_file, true);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &app_server_url,
@@ -1694,7 +1694,7 @@ async fn remote_doctor_reports_backend_failure_without_failing() {
     let enrollment = test_enrollment_record();
     let (auth_file, state_file) = write_test_auth_and_state(&dir, &enrollment);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &app_server_url,
@@ -1729,7 +1729,7 @@ async fn remote_doctor_reports_app_server_client_list_failure_without_failing() 
     let enrollment = test_enrollment_record();
     let (auth_file, state_file) = write_test_auth_and_state(&dir, &enrollment);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &app_server_url,
@@ -1826,7 +1826,7 @@ exports.signDeviceKey = async function signDeviceKey(keyId, payload) {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &app_server_url,
@@ -1861,7 +1861,7 @@ exports.signDeviceKey = async function signDeviceKey(keyId, payload) {
 #[tokio::test(flavor = "multi_thread")]
 async fn threads_command_lists_fake_thread_over_explicit_unix_endpoint() {
     let url = start_fake_unix_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args(["--endpoint", &url, "threads", "--cwd", "/tmp/project"])
         .output()
         .unwrap();
@@ -1878,7 +1878,7 @@ async fn threads_command_lists_fake_thread_over_explicit_unix_endpoint() {
 #[tokio::test(flavor = "multi_thread")]
 async fn send_command_waits_for_completion_when_wait_is_set() {
     let url = start_fake_server().await;
-    let output = Command::new(env!("CARGO_BIN_EXE_cdxm"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-monitor"))
         .args([
             "--endpoint",
             &url,

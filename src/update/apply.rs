@@ -399,7 +399,7 @@ mod tests {
     fn apply_installs_complete_manifest() {
         let fixture = fixture();
         let summary = apply_manifest(&fixture.manifest).unwrap();
-        assert_eq!(summary.changed, 2);
+        assert_eq!(summary.changed, 1);
         assert_eq!(summary.removed, 0);
         assert_eq!(
             std::fs::read(ManagedFile::CodexMonitor.destination(&fixture.manifest.install_root))
@@ -428,10 +428,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_failure_restores_every_destination() {
+    fn apply_failure_preserves_destination() {
         let fixture = fixture();
         let result = apply_manifest_with_hook(&fixture.manifest, |id| {
-            if id == ManagedFile::Cdxm {
+            if id == ManagedFile::CodexMonitor {
                 anyhow::bail!("injected replacement failure");
             }
             Ok(())

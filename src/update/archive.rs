@@ -187,15 +187,12 @@ mod tests {
     }
 
     fn valid_entries() -> Vec<(&'static str, &'static [u8])> {
-        vec![("codex-monitor.exe", b"monitor"), ("cdxm.exe", b"cdxm")]
+        vec![("codex-monitor.exe", b"monitor")]
     }
 
     fn duplicate_name_zip() -> Vec<u8> {
-        let mut archive = zip_bytes(&[
-            ("codex-monitor.exe", b"one"),
-            ("codex-monitor.tmp", b"two"),
-            ("cdxm.exe", b"cdxm"),
-        ]);
+        let mut archive =
+            zip_bytes(&[("codex-monitor.exe", b"one"), ("codex-monitor.tmp", b"two")]);
         let old = b"codex-monitor.tmp";
         let new = b"codex-monitor.exe";
         for offset in 0..=archive.len() - old.len() {
@@ -210,7 +207,7 @@ mod tests {
                 .count(),
             0
         );
-        assert_eq!(declared_zip_entry_count(&archive).unwrap(), 3);
+        assert_eq!(declared_zip_entry_count(&archive).unwrap(), 2);
         archive
     }
 
@@ -235,27 +232,20 @@ mod tests {
     fn release_zip_extracts_exact_binary_set() {
         let destination = TempDir::new().unwrap();
         let staged = extract_release_zip(&zip_bytes(&valid_entries()), destination.path()).unwrap();
-        assert_eq!(staged.len(), 2);
+        assert_eq!(staged.len(), 1);
         assert_eq!(
-            std::fs::read(destination.path().join("cdxm.exe")).unwrap(),
-            b"cdxm"
+            std::fs::read(destination.path().join("codex-monitor.exe")).unwrap(),
+            b"monitor"
         );
     }
 
     #[test]
     fn release_zip_rejects_missing_duplicate_nested_and_unexpected_members() {
         let cases = [
-            zip_bytes(&valid_entries()[..1]),
+            zip_bytes(&[]),
             duplicate_name_zip(),
-            zip_bytes(&[
-                ("nested/codex-monitor.exe", b"monitor"),
-                ("cdxm.exe", b"cdxm"),
-            ]),
-            zip_bytes(&[
-                ("codex-monitor.exe", b"monitor"),
-                ("cdxm.exe", b"cdxm"),
-                ("unexpected.exe", b"bad"),
-            ]),
+            zip_bytes(&[("nested/codex-monitor.exe", b"monitor")]),
+            zip_bytes(&[("codex-monitor.exe", b"monitor"), ("cdxm.exe", b"cdxm")]),
         ];
 
         for (index, archive) in cases.into_iter().enumerate() {

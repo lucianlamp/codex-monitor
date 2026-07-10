@@ -123,7 +123,7 @@ fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
                 manifest_path.display()
             )
         })?;
-        let mut manifest: UpdateManifest =
+        let manifest: UpdateManifest =
             serde_json::from_slice(&bytes).context("staged update manifest is not valid JSON")?;
         manifest.validate_shape()?;
         if !windows::paths_equal(&manifest.install_root, &expected_paths.root) {
@@ -145,7 +145,6 @@ fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
 
         windows::wait_for_process_exit(parent_pid)?;
         windows::ensure_legacy_bridge_not_running()?;
-        let deferred_public = windows::defer_active_public_binaries(&mut manifest)?;
         let summary = apply::apply_manifest(&manifest)?;
         windows::finalize_environment(&expected_paths)?;
         apply::write_result_atomic(
@@ -158,15 +157,10 @@ fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
                     summary.changed,
                     summary.removed,
                     summary.unchanged,
-                    match (
-                        summary.deferred_cleanup.is_some(),
-                        deferred_public.is_empty()
-                    ) {
-                        (true, false) =>
-                            "; active public binary update and old executable cleanup are deferred",
-                        (true, true) => "; old running executable cleanup is deferred",
-                        (false, false) => "; active public binary update is deferred",
-                        (false, true) => "",
+                    if summary.deferred_cleanup.is_some() {
+                        "; old running executable cleanup is deferred"
+                    } else {
+                        ""
                     }
                 ),
             },

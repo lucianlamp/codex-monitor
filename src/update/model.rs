@@ -15,18 +15,16 @@ pub const RESULT_VERSION: u32 = 1;
 #[serde(rename_all = "kebab-case")]
 pub enum ManagedFile {
     CodexMonitor,
-    Cdxm,
 }
 
 impl ManagedFile {
-    pub const ALL: [Self; 2] = [Self::CodexMonitor, Self::Cdxm];
+    pub const ALL: [Self; 1] = [Self::CodexMonitor];
 
-    pub const RELEASE: [Self; 2] = Self::ALL;
+    pub const RELEASE: [Self; 1] = Self::ALL;
 
     pub fn destination(self, install_root: &Path) -> PathBuf {
         let (directory, name) = match self {
             Self::CodexMonitor => ("bin", "codex-monitor.exe"),
-            Self::Cdxm => ("bin", "cdxm.exe"),
         };
         install_root.join(directory).join(name)
     }
@@ -34,7 +32,6 @@ impl ManagedFile {
     pub fn staged_name(self) -> &'static str {
         match self {
             Self::CodexMonitor => "codex-monitor.exe",
-            Self::Cdxm => "cdxm.exe",
         }
     }
 
@@ -172,20 +169,12 @@ mod tests {
             ManagedFile::CodexMonitor.destination(root),
             root.join("bin/codex-monitor.exe")
         );
-        assert_eq!(
-            ManagedFile::Cdxm.destination(root),
-            root.join("bin/cdxm.exe")
-        );
     }
 
     #[test]
     fn required_and_optional_file_sets_are_fixed() {
         assert!(ManagedFile::CodexMonitor.is_required());
-        assert!(ManagedFile::Cdxm.is_required());
-        assert_eq!(
-            ManagedFile::ALL,
-            [ManagedFile::CodexMonitor, ManagedFile::Cdxm]
-        );
+        assert_eq!(ManagedFile::ALL, [ManagedFile::CodexMonitor]);
         assert_eq!(ManagedFile::RELEASE, ManagedFile::ALL);
     }
 
@@ -218,7 +207,7 @@ mod tests {
         let files = manifest
             .files
             .iter()
-            .filter(|file| file.id != ManagedFile::Cdxm)
+            .filter(|file| file.id != ManagedFile::CodexMonitor)
             .cloned()
             .collect();
         assert!(UpdateManifest { files, ..manifest }
