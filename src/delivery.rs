@@ -257,7 +257,7 @@ async fn open_monitor_session(
     String,
     crate::client::AppServerClient<Box<dyn crate::transport::AppServerTransport>>,
 )> {
-    let (endpoint, thread) = crate::cli::resolve_endpoint_and_thread(endpoint, thread, cwd).await?;
+    let (endpoint, thread) = resolve_monitor_endpoint_and_thread(endpoint, thread, cwd).await?;
     let transport = crate::transport::open_endpoint_transport(endpoint.clone()).await?;
     let mut client = crate::client::AppServerClient::new(transport);
     let setup = async {
@@ -270,6 +270,27 @@ async fn open_monitor_session(
         return Err(error);
     }
     Ok((endpoint, thread, client))
+}
+
+fn can_load_requested_thread_after_connect(
+    endpoint: &crate::target::Endpoint,
+    thread: &Option<String>,
+) -> bool {
+    matches!(endpoint, crate::target::Endpoint::App) && thread.is_some()
+}
+
+async fn resolve_monitor_endpoint_and_thread(
+    endpoint: crate::target::Endpoint,
+    thread: Option<String>,
+    cwd: Option<std::path::PathBuf>,
+) -> anyhow::Result<(crate::target::Endpoint, String)> {
+    if can_load_requested_thread_after_connect(&endpoint, &thread) {
+        let endpoint = crate::target::resolve_app_endpoint(endpoint)?;
+        let thread = thread.expect("pinned App target must have a requested thread");
+        return Ok((endpoint, thread));
+    }
+
+    crate::cli::resolve_endpoint_and_thread(endpoint, thread, cwd).await
 }
 
 async fn revalidate_dynamic_target(
@@ -286,7 +307,7 @@ async fn revalidate_dynamic_target(
         return Ok(TargetGuard::Current);
     }
 
-    let (resolved_endpoint, resolved_thread) = crate::cli::resolve_endpoint_and_thread(
+    let (resolved_endpoint, resolved_thread) = resolve_monitor_endpoint_and_thread(
         logical_endpoint.clone(),
         requested_thread.clone(),
         cwd.clone(),
@@ -527,6 +548,32 @@ mod tests {
     fn default_state_path_points_to_state_json() {
         let path = super::default_state_path().unwrap();
         assert_eq!(path.file_name().unwrap(), "state.json");
+    }
+
+    #[test]
+    fn pinned_app_thread_bypasses_loaded_probe() {
+        let thread = Some("thread-1".to_string());
+
+        assert!(super::can_load_requested_thread_after_connect(
+            &crate::target::Endpoint::App,
+            &thread,
+        ));
+        assert!(!super::can_load_requested_thread_after_connect(
+            &crate::target::Endpoint::Auto,
+            &thread,
+        ));
+        assert!(!super::can_load_requested_thread_after_connect(
+            &crate::target::Endpoint::Managed,
+            &thread,
+        ));
+        assert!(!super::can_load_requested_thread_after_connect(
+            &crate::target::Endpoint::Explicit("ws://127.0.0.1:12345".into()),
+            &thread,
+        ));
+        assert!(!super::can_load_requested_thread_after_connect(
+            &crate::target::Endpoint::App,
+            &None,
+        ));
     }
 
     #[test]
