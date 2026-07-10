@@ -80,6 +80,7 @@ pub fn resolve_app_endpoint(endpoint: Endpoint) -> anyhow::Result<Endpoint> {
     }
 }
 
+#[cfg(windows)]
 fn select_windows_app_endpoint(_: Vec<EndpointCandidate>) -> anyhow::Result<Endpoint> {
     bail!(
         "Windows uses the native Codex App runtime; use `$codex-monitor` for foreground delivery or `$codex-monitor heartbeat` for persistent delivery"

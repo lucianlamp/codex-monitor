@@ -145,12 +145,14 @@ impl UpdateManifest {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(windows)]
 pub struct InstallPaths {
     pub root: PathBuf,
     pub app_bridge_backup: PathBuf,
     pub update_result: PathBuf,
 }
 
+#[cfg(windows)]
 impl InstallPaths {
     pub fn new(root: PathBuf) -> Self {
         Self {

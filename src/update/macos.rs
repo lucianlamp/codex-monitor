@@ -26,6 +26,7 @@ pub(crate) struct MacInstallPaths {
 }
 
 impl MacInstallPaths {
+    #[cfg(test)]
     pub fn for_home(home: &Path) -> Self {
         Self::new(home, home.join(".codex-monitor"))
     }
@@ -171,6 +172,7 @@ pub(crate) fn write_cdxm_launcher(root: &Path) -> anyhow::Result<()> {
     atomic_write(&root.join("bin/cdxm"), CDXM_LAUNCHER.as_bytes(), true)
 }
 
+#[cfg(test)]
 fn owned_paths(home: &Path) -> BTreeSet<PathBuf> {
     let paths = MacInstallPaths::for_home(home);
     owned_paths_for(&paths)

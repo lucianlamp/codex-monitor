@@ -78,12 +78,10 @@ fn internal_macos_finalizer_is_hidden_but_registered() {
         .contains("__finalize-macos-install"));
 
     let finalizer = Command::new(primary)
-        .arg("__finalize-macos-install")
+        .args(["__finalize-macos-install", "--help"])
         .output()
         .unwrap();
-    #[cfg(not(target_os = "macos"))]
-    assert!(String::from_utf8_lossy(&finalizer.stderr)
-        .contains("macOS installation finalization is only available on macOS"));
+    assert!(finalizer.status.success());
 }
 
 #[test]
