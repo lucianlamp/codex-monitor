@@ -1106,6 +1106,7 @@ pub(crate) async fn resolve_endpoint_and_thread(
     thread: Option<String>,
     cwd: Option<PathBuf>,
 ) -> anyhow::Result<(crate::target::Endpoint, String)> {
+    let endpoint = crate::target::resolve_app_endpoint(endpoint)?;
     if let Some(thread) = thread {
         return Ok((
             resolve_endpoint_for_loaded_thread(endpoint, &thread).await?,

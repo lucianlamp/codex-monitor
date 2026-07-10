@@ -248,6 +248,11 @@ On Unix, `--target app` connects to:
 $HOME/.codex/app-server-control/app-server-control.sock
 ```
 
+On Windows, `--target app` discovers the loopback WebSocket listener owned by
+the running Codex App app-server process. It fails with the candidate endpoints
+listed when more than one live Codex App endpoint is available; use
+`--endpoint` to select one explicitly in that case.
+
 `--endpoint ws://127.0.0.1:<port>` connects to an explicit loopback WebSocket.
 `--endpoint unix:///path/to/app-server.sock` connects to an explicit Unix
 WebSocket app-server socket.

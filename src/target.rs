@@ -33,6 +33,7 @@ pub fn endpoint_from_options(endpoint: Option<String>, target: crate::cli::Targe
 }
 
 pub fn resolve_default_auto_endpoint(endpoint: Endpoint) -> anyhow::Result<Endpoint> {
+    let endpoint = resolve_app_endpoint(endpoint)?;
     if endpoint != Endpoint::Auto {
         return Ok(endpoint);
     }
@@ -55,6 +56,49 @@ pub fn resolve_default_auto_endpoint(endpoint: Endpoint) -> anyhow::Result<Endpo
                 .join(", ");
             bail!(
                 "multiple auto endpoints found; pass --endpoint or --target explicitly: {choices}"
+            )
+        }
+    }
+}
+
+pub fn resolve_app_endpoint(endpoint: Endpoint) -> anyhow::Result<Endpoint> {
+    if endpoint != Endpoint::App {
+        return Ok(endpoint);
+    }
+
+    #[cfg(unix)]
+    {
+        Ok(Endpoint::App)
+    }
+    #[cfg(windows)]
+    {
+        select_windows_app_endpoint(discover_auto_endpoint_candidates())
+    }
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        bail!("--target app is not supported on this platform")
+    }
+}
+
+fn select_windows_app_endpoint(candidates: Vec<EndpointCandidate>) -> anyhow::Result<Endpoint> {
+    let app_endpoints = candidates
+        .into_iter()
+        .filter(|candidate| candidate.source == "codex-app-server-process")
+        .collect::<Vec<_>>();
+
+    match app_endpoints.as_slice() {
+        [] => bail!(
+            "no live Codex App endpoint found on Windows; open Codex App and a project task, then retry"
+        ),
+        [candidate] => Ok(candidate.endpoint.clone()),
+        many => {
+            let choices = many
+                .iter()
+                .map(|candidate| endpoint_label(&candidate.endpoint))
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "multiple live Codex App endpoints found on Windows; pass --endpoint explicitly: {choices}"
             )
         }
     }
@@ -114,8 +158,15 @@ fn push_candidate(
     source: String,
 ) {
     let label = endpoint_label(&endpoint);
-    if seen.insert(label) {
+    if seen.insert(label.clone()) {
         candidates.push(EndpointCandidate { endpoint, source });
+    } else if source == "codex-app-server-process" {
+        if let Some(candidate) = candidates
+            .iter_mut()
+            .find(|candidate| endpoint_label(&candidate.endpoint) == label)
+        {
+            candidate.source = source;
+        }
     }
 }
 
@@ -512,6 +563,80 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
             parsed[1].endpoint,
             Endpoint::Explicit("ws://127.0.0.1:63030".to_string())
         );
+    }
+
+    #[test]
+    fn windows_app_endpoint_selects_single_app_server_candidate() {
+        let candidates = vec![
+            EndpointCandidate {
+                endpoint: Endpoint::Explicit("ws://127.0.0.1:54014".into()),
+                source: "codex-cli-remote".into(),
+            },
+            EndpointCandidate {
+                endpoint: Endpoint::Explicit("ws://127.0.0.1:54015".into()),
+                source: "codex-app-server-process".into(),
+            },
+        ];
+
+        assert_eq!(
+            select_windows_app_endpoint(candidates).unwrap(),
+            Endpoint::Explicit("ws://127.0.0.1:54015".into())
+        );
+    }
+
+    #[test]
+    fn duplicate_endpoint_prefers_app_server_source() {
+        let endpoint = Endpoint::Explicit("ws://127.0.0.1:54015".into());
+        let mut candidates = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        push_candidate(
+            &mut candidates,
+            &mut seen,
+            endpoint.clone(),
+            "codex-cli-remote".into(),
+        );
+        push_candidate(
+            &mut candidates,
+            &mut seen,
+            endpoint,
+            "codex-app-server-process".into(),
+        );
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].source, "codex-app-server-process");
+    }
+
+    #[test]
+    fn windows_app_endpoint_rejects_missing_app_server_candidate() {
+        let error = select_windows_app_endpoint(vec![EndpointCandidate {
+            endpoint: Endpoint::Explicit("ws://127.0.0.1:54014".into()),
+            source: "codex-cli-remote".into(),
+        }])
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("no live Codex App endpoint found"));
+    }
+
+    #[test]
+    fn windows_app_endpoint_rejects_ambiguous_app_servers() {
+        let error = select_windows_app_endpoint(vec![
+            EndpointCandidate {
+                endpoint: Endpoint::Explicit("ws://127.0.0.1:54015".into()),
+                source: "codex-app-server-process".into(),
+            },
+            EndpointCandidate {
+                endpoint: Endpoint::Explicit("ws://127.0.0.1:54016".into()),
+                source: "codex-app-server-process".into(),
+            },
+        ])
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("multiple live Codex App endpoints found"));
     }
 
     #[test]
