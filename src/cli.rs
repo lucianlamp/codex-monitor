@@ -43,6 +43,8 @@ pub enum Commands {
         #[arg(long)]
         parent_pid: u32,
     },
+    #[command(name = "__finalize-macos-install", hide = true)]
+    FinalizeMacosInstall,
     Threads {
         #[arg(long)]
         cwd: String,
@@ -333,6 +335,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<i32> {
             manifest,
             parent_pid,
         } => crate::update::run_apply(&manifest, parent_pid),
+        Commands::FinalizeMacosInstall => crate::update::run_finalize_macos_install(),
         Commands::Targets => {
             for candidate in crate::target::discover_auto_endpoint_candidates() {
                 println!(

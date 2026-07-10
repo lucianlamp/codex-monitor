@@ -39,6 +39,7 @@ fn unix_installer_uses_single_native_binary_and_cdxm_launcher() {
     assert!(!installer.contains("codex-monitor cdxm"));
     assert!(installer.contains("cargo install --path \"$SOURCE_DIR\" --bin codex-monitor"));
     assert!(installer.contains("exec \"$SCRIPT_DIR/codex-monitor\" \"$@\""));
+    assert!(installer.contains("__finalize-macos-install"));
 }
 
 #[test]
@@ -55,6 +56,24 @@ fn update_command_is_public_and_apply_worker_is_hidden() {
         .output()
         .unwrap();
     assert!(update.status.success());
+}
+
+#[test]
+fn internal_macos_finalizer_is_hidden_but_registered() {
+    let primary = env!("CARGO_BIN_EXE_codex-monitor");
+    let help = Command::new(primary).arg("--help").output().unwrap();
+    assert!(help.status.success());
+    assert!(!String::from_utf8(help.stdout)
+        .unwrap()
+        .contains("__finalize-macos-install"));
+
+    let finalizer = Command::new(primary)
+        .arg("__finalize-macos-install")
+        .output()
+        .unwrap();
+    #[cfg(not(target_os = "macos"))]
+    assert!(String::from_utf8_lossy(&finalizer.stderr)
+        .contains("macOS installation finalization is only available on macOS"));
 }
 
 #[test]

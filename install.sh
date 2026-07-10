@@ -16,6 +16,7 @@ ASSUME_YES=0
 INSTALL_SHIM=""
 UPDATE_PATH=""
 SKIP_BUILD=0
+BINARY_INSTALLED=0
 SOURCE_DIR=""
 TMP_DIR=""
 
@@ -242,6 +243,7 @@ install_binaries() {
     local target
     target="$(prebuilt_target)"
     if [ -n "$target" ] && download_prebuilt "$target"; then
+      BINARY_INSTALLED=1
       return 0
     fi
   fi
@@ -255,7 +257,14 @@ install_binaries() {
   mkdir -p "$INSTALL_ROOT"
   cargo install --path "$SOURCE_DIR" --bin codex-monitor --force --root "$INSTALL_ROOT"
   write_cdxm_launcher
+  BINARY_INSTALLED=1
   echo "Installed codex-monitor to $BIN_DIR/codex-monitor"
+}
+
+finalize_macos_install() {
+  [ "$BINARY_INSTALLED" -eq 1 ] || return 0
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  "$BIN_DIR/codex-monitor" __finalize-macos-install
 }
 
 install_skill() {
@@ -355,6 +364,7 @@ echo "codex shim target: $SHIM_TARGET"
 
 if prompt_yes_no "Install codex-monitor and the cdxm compatibility launcher to $BIN_DIR?" y; then
   install_binaries
+  finalize_macos_install
 else
   echo "Skipped binary install."
 fi

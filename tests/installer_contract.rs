@@ -314,14 +314,23 @@ fn installer_has_prebuilt_download_path() {
     assert!(s.contains("aarch64-apple-darwin"));
     assert!(s.contains("x86_64-apple-darwin"));
     assert!(s.contains("codex-monitor-$target.tar.gz"));
-    assert!(s.contains("Prebuilt archive did not contain the expected binaries"));
+    assert!(s.contains("Prebuilt archive did not contain codex-monitor"));
     // explicit source-build opt-in still exists
     assert!(s.contains("--build-from-source"));
 }
 
 #[test]
-fn installer_skip_build_still_installs_nothing() {
-    // Re-uses the existing skill+shim contract: --skip-build must not download or build.
+fn unix_installer_finalizes_real_macos_installs() {
+    let s = install_sh();
+    assert!(s.contains("__finalize-macos-install"));
+    assert!(s.contains("Darwin"));
+    assert!(s.contains("SKIP_BUILD"));
+}
+
+#[test]
+fn installer_skip_build_does_not_run_the_macos_finalizer() {
+    // --skip-build writes the compatibility launcher for its contract tests,
+    // but must not download/build a native binary or run the macOS finalizer.
     let home = tempfile::tempdir().unwrap();
     let output = Command::new("bash")
         .arg(repo_root().join("install.sh"))
@@ -343,5 +352,9 @@ fn installer_skip_build_still_installs_nothing() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!home.path().join(".codex-monitor/bin/cdxm").exists());
+    assert!(home.path().join(".codex-monitor/bin/cdxm").exists());
+    assert!(!home
+        .path()
+        .join(".codex-monitor/bin/codex-monitor")
+        .exists());
 }

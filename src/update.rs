@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
+#[cfg(any(windows, test))]
+use std::ffi::OsString;
 use std::{
-    ffi::OsString,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -18,9 +19,14 @@ pub async fn run_update() -> Result<i32> {
     run_update_windows().await
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub async fn run_update() -> Result<i32> {
-    anyhow::bail!("codex-monitor update with Codex App runtime refresh is currently Windows-only")
+    run_update_macos().await
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub async fn run_update() -> Result<i32> {
+    anyhow::bail!("codex-monitor update is currently supported on Windows and macOS")
 }
 
 #[cfg(windows)]
@@ -42,7 +48,32 @@ pub fn report_previous_failure() -> Result<()> {
             eprintln!("Previous codex-monitor update failed: {message}");
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        let paths = macos::install_paths()?;
+        let _ = apply::cleanup_ready_backups(&paths.root)?;
+        if let Some(message) = apply::take_previous_failure(&paths.update_result)? {
+            eprintln!("Previous codex-monitor update failed: {message}");
+        }
+    }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn run_finalize_macos_install() -> Result<i32> {
+    let summary = macos::finalize_install()?;
+    println!(
+        "macOS install finalized: {} LaunchAgents migrated, {} reloaded, {} legacy binaries removed.",
+        summary.migrated_agents,
+        summary.reloaded_agents,
+        summary.removed_legacy_binaries
+    );
+    Ok(0)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn run_finalize_macos_install() -> Result<i32> {
+    anyhow::bail!("macOS installation finalization is only available on macOS")
 }
 
 #[cfg(windows)]
@@ -110,6 +141,103 @@ async fn run_update_windows() -> Result<i32> {
         "Verified update staged. Applying it now; reopen Codex App after the completion message."
     );
     Ok(0)
+}
+
+#[cfg(target_os = "macos")]
+async fn run_update_macos() -> Result<i32> {
+    use model::{ReleasePlatform, UpdateManifest, UpdateResult, MANIFEST_VERSION, RESULT_VERSION};
+
+    let platform = ReleasePlatform::current()?;
+    let paths = macos::install_paths()?;
+    std::fs::create_dir_all(&paths.root).with_context(|| {
+        format!(
+            "failed to create codex-monitor install root {}",
+            paths.root.display()
+        )
+    })?;
+    let _ = apply::cleanup_ready_backups(&paths.root)?;
+    let staging_root = paths
+        .root
+        .join(format!(".update-staging-{}", unique_suffix()?));
+    std::fs::create_dir(&staging_root).with_context(|| {
+        format!(
+            "failed to create update staging directory {}",
+            staging_root.display()
+        )
+    })?;
+    let _guard = StagingGuard::new(staging_root.clone());
+    let release_base = std::env::var("CDXM_INSTALL_RELEASE_BASE").unwrap_or_else(|_| {
+        "https://github.com/lucianlamp/codex-monitor/releases/latest/download".into()
+    });
+
+    let update_result = async {
+        println!("Downloading and verifying the latest codex-monitor release...");
+        let files =
+            archive::download_latest_release(&release_base, &staging_root, platform).await?;
+        let manifest = UpdateManifest {
+            version: MANIFEST_VERSION,
+            platform,
+            install_root: paths.root.clone(),
+            staging_root: staging_root.clone(),
+            files,
+        };
+        manifest.validate_for(platform)?;
+        let apply_summary = apply::apply_manifest(&manifest)?;
+        let finalize_summary = macos::finalize_install()?;
+        Ok::<_, anyhow::Error>((apply_summary, finalize_summary))
+    }
+    .await;
+
+    match update_result {
+        Ok((apply_summary, finalize_summary)) => {
+            apply::write_result_atomic(
+                &paths.update_result,
+                &UpdateResult {
+                    version: RESULT_VERSION,
+                    success: true,
+                    message: format!(
+                        "updated {} files, left {} identical files, migrated {} LaunchAgents, reloaded {}, removed {} legacy binaries",
+                        apply_summary.changed,
+                        apply_summary.unchanged,
+                        finalize_summary.migrated_agents,
+                        finalize_summary.reloaded_agents,
+                        finalize_summary.removed_legacy_binaries
+                    ),
+                },
+            )?;
+            println!(
+                "codex-monitor update complete: {} updated, {} unchanged; {} LaunchAgents migrated and {} reloaded; {} legacy binaries removed.",
+                apply_summary.changed,
+                apply_summary.unchanged,
+                finalize_summary.migrated_agents,
+                finalize_summary.reloaded_agents,
+                finalize_summary.removed_legacy_binaries
+            );
+            if let Some(path) = apply_summary.deferred_cleanup {
+                println!(
+                    "Verified update backup cleanup is deferred until the next run: {}",
+                    path.display()
+                );
+            }
+            Ok(0)
+        }
+        Err(error) => {
+            let message = format!("{error:#}");
+            if let Err(write_error) = apply::write_result_atomic(
+                &paths.update_result,
+                &UpdateResult {
+                    version: RESULT_VERSION,
+                    success: false,
+                    message: message.clone(),
+                },
+            ) {
+                eprintln!(
+                    "codex-monitor update failed: {message}; also failed to persist the result: {write_error:#}"
+                );
+            }
+            Err(error)
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -213,6 +341,7 @@ fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
     }
 }
 
+#[cfg(any(windows, test))]
 fn helper_args(manifest: &Path, parent_pid: u32) -> Vec<OsString> {
     vec![
         OsString::from("__apply-update"),
@@ -223,6 +352,7 @@ fn helper_args(manifest: &Path, parent_pid: u32) -> Vec<OsString> {
     ]
 }
 
+#[cfg(windows)]
 fn write_manifest_atomic(path: &Path, manifest: &model::UpdateManifest) -> anyhow::Result<()> {
     let parent = path
         .parent()
@@ -259,6 +389,7 @@ impl StagingGuard {
         Self { path, keep: false }
     }
 
+    #[cfg(windows)]
     fn keep(&mut self) {
         self.keep = true;
     }
