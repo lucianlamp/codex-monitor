@@ -16,7 +16,7 @@
 - Modify: `src/delivery.rs`
 - Test: `src/delivery.rs`
 
-- [ ] **Step 1: Add failing drift classification and no-send tests**
+- [x] **Step 1: Add failing drift classification and no-send tests**
 
 Add a `dynamic_target_drift_is_detected` test that classifies an `Endpoint::App` session connected to `ws://127.0.0.1:60498` against a freshly resolved `ws://127.0.0.1:56473` target and expects `TargetGuard::Drifted`.
 
@@ -39,7 +39,7 @@ assert_eq!(state.last_seen("agmsg:dev:codex"), 0);
 assert!(client.into_inner().sent.is_empty());
 ```
 
-- [ ] **Step 2: Run the new tests and verify red**
+- [x] **Step 2: Run the new tests and verify red**
 
 Run:
 
@@ -50,7 +50,7 @@ cargo test delivery::tests::drifted_target_does_not_send_or_advance_state -- --e
 
 Expected: compilation fails because `TargetGuard`, `DeliveryPass::TargetDrifted`, and the guarded delivery signature do not exist yet.
 
-- [ ] **Step 3: Implement target classification**
+- [x] **Step 3: Implement target classification**
 
 Add these private types to `src/delivery.rs`:
 
@@ -92,7 +92,7 @@ async fn revalidate_dynamic_target(
 
 Return `Current` immediately for static targets. Otherwise call `resolve_endpoint_and_thread` with cloned logical inputs and classify the fresh result.
 
-- [ ] **Step 4: Refactor the delivery helper around already-polled events**
+- [x] **Step 4: Refactor the delivery helper around already-polled events**
 
 Rename `deliver_available_events` to `deliver_polled_events`. Replace its source polling with `events: Vec<BridgeEvent>` and add `guard: TargetGuard`. Return `DeliveryPass::TargetDrifted` before formatting or sending any event when the guard is drifted. Keep state persistence after acknowledgement only.
 
@@ -100,7 +100,7 @@ Move `source.poll_after(state.last_seen(...))` into the connected loop in `run_m
 
 Handle `DeliveryPass::TargetDrifted` by logging the connected and replacement endpoint, closing the old client, and immediately continuing the outer session loop. Handle revalidation errors like reconnectable session failures, with the existing shutdown-aware two-second delay and no state advancement.
 
-- [ ] **Step 5: Run focused and existing reconnect tests**
+- [x] **Step 5: Run focused and existing reconnect tests**
 
 Run:
 
@@ -112,7 +112,7 @@ cargo test client::tests
 
 Expected: all tests pass, including the original error-driven reconnect test and the new still-responsive-old-endpoint guard tests.
 
-- [ ] **Step 6: Commit the implementation**
+- [x] **Step 6: Commit the implementation**
 
 ```powershell
 git add src/delivery.rs
@@ -126,11 +126,11 @@ git commit -m "fix: reject stale dynamic endpoints"
 - Modify: `skills/codex-monitor/SKILL.md`
 - Modify: `docs/superpowers/specs/2026-07-10-codex-monitor-reconnect-steer-design.md`
 
-- [ ] **Step 1: Update behavior documentation**
+- [x] **Step 1: Update behavior documentation**
 
 Document that pending events on `app` and `auto` revalidate the logical target before delivery, that a still-responsive stale endpoint is rejected, and that `explicit`/`managed` do not add discovery probes. Change the design status to implemented only after tests pass.
 
-- [ ] **Step 2: Run complete verification**
+- [x] **Step 2: Run complete verification**
 
 Run:
 

@@ -1,7 +1,7 @@
 # Codex Monitor Reconnect and Steer Delivery Design
 
 **Date:** 2026-07-10  
-**Status:** Endpoint-drift revision approved; implementation pending
+**Status:** Endpoint-drift guard implemented; live restart acceptance pending
 
 ## Context
 

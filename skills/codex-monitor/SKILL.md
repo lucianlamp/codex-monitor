@@ -256,9 +256,12 @@ idle thread -> `turn/start`, then mark the agmsg row seen after ack.
 Use `--mode auto|start|steer` when diagnosing active-turn behavior.
 `cdxm agmsg watch ...` is a source-specific shortcut for the same adapter.
 The watcher retains the logical target and reconnects after endpoint, setup,
-or delivery failures. `--target app` and `--target auto` discover the current
-endpoint on every retry, and an event whose cursor was not saved is retried
-after reconnect. App-server ack and saved state do not prove the current Codex
+or delivery failures. Before sending a pending event, `--target app` and
+`--target auto` re-resolve the logical target. If the connected endpoint or
+thread drifted, the watcher closes it without sending or saving the cursor,
+even when the old app-server still responds, then reconnects and retries the
+same event. Explicit and managed targets do not add this discovery probe.
+App-server ack and saved state do not prove the current Codex
 UI rendered a separate bubble: active-turn `turn/steer` input may reach the
 model without one. Verify model receipt in the intended loaded thread; test a
 separate visible event only when UI rendering itself is required.

@@ -518,10 +518,12 @@ Use `--mode start`, `--mode steer`, or `--mode auto` to make delivery behavior
 explicit during diagnosis.
 
 A live watcher keeps the requested logical target and reconnects when endpoint
-resolution, transport setup, or delivery fails. For `--target app` and
-`--target auto`, each retry discovers the current App endpoint again. Because
-the source cursor remains unchanged until acknowledgement, the first
-unacknowledged event is retried after reconnect instead of being dropped.
+resolution, transport setup, or delivery fails. When an event is pending,
+`--target app` and `--target auto` also re-resolve the logical target before
+delivery. If the connected endpoint or thread is no longer current, the
+watcher rejects the old session even when it still responds, reconnects, and
+retries from the unchanged source cursor. Explicit and managed targets do not
+add this discovery probe.
 
 App-server ack and codex-monitor state advancement mean the app-server accepted the
 delivery. They do not prove that the current Codex UI rendered a visible
