@@ -17,6 +17,28 @@ fn codex_monitor_skill() -> String {
     fs::read_to_string(repo_root().join("skills/codex-monitor/SKILL.md")).unwrap()
 }
 
+fn foreground_helper() -> String {
+    fs::read_to_string(
+        repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn foreground_helper_contract() {
+    let helper = foreground_helper();
+    assert!(helper.contains("inbox.sh"));
+    assert!(helper.contains("No new messages."));
+    assert!(helper.contains("while :"));
+    assert!(helper.contains("exit 0"));
+    for forbidden in ["nohup", "pidfile", "monitor watch", "launch-agent"] {
+        assert!(
+            !helper.contains(forbidden),
+            "foreground helper contains forbidden lifecycle behavior `{forbidden}`"
+        );
+    }
+}
+
 #[test]
 fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();

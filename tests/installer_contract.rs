@@ -7,6 +7,51 @@ fn repo_root() -> &'static Path {
 }
 
 #[test]
+fn foreground_helper_suppresses_empty_polls_and_returns_first_message() {
+    let temp = tempfile::tempdir().unwrap();
+    let scripts = temp.path().join("agmsg");
+    fs::create_dir_all(&scripts).unwrap();
+    let inbox = scripts.join("inbox.sh");
+    fs::write(
+        &inbox,
+        r#"#!/usr/bin/env bash
+count_file="$AGMSG_TEST_COUNT"
+count=0
+[[ -f "$count_file" ]] && count=$(cat "$count_file")
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if (( count < 3 )); then
+  printf 'No new messages.\n'
+else
+  printf '1 new message(s):\n\n  [now] sender: foreground-ready\n'
+fi
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&inbox, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh"))
+        .args(["cdxm", "codex"])
+        .env("AGMSG_SCRIPTS_DIR", &scripts)
+        .env("AGMSG_TEST_COUNT", temp.path().join("count"))
+        .env("CDXM_FOREGROUND_POLL_SECONDS", "0")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("foreground-ready"));
+    assert!(!stdout.contains("No new messages."));
+    assert_eq!(fs::read_to_string(temp.path().join("count")).unwrap().trim(), "3");
+}
+
+#[test]
 fn installer_installs_skill_and_optional_shim_without_building() {
     let home = tempfile::tempdir().unwrap();
     let output = Command::new("bash")
