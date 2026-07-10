@@ -100,61 +100,37 @@ For a local source install without touching the Codex shim:
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -NoShim
 ```
 
-To make the Windows Codex App and `cdxm` share the exact same app-server while
-preserving the App's native stdio transport, enable the reversible App monitor
-bridge and restart Codex App:
+Keep Windows Codex App on its OpenAI-signed native `codex.exe`. Leave
+`CODEX_CLI_PATH` unset or point it directly at that signed App-managed
+executable; do not use an external App launcher. In Codex App, the installed
+skill provides three explicit receive modes:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -Source .
+```text
+$codex-monitor            keep the current turn alive and wait locally
+$codex-monitor heartbeat  create or update a one-minute App heartbeat
+$codex-monitor off        stop foreground wait and remove this task's heartbeat
 ```
 
-The installer preserves prior user-level `CODEX_CLI_PATH` and
-`CDXM_REAL_CODEX` values. By default it selects the installed Codex App bundle
-before older per-user CLI copies. It copies the App-bundled Codex executable to
-`~/.codex-monitor/runtime/codex-app-real.exe` and copies its matching
-`codex-code-mode-host.exe`, command runner, and Windows sandbox setup beside it,
-because WindowsApps package executables cannot be launched directly by the
-external bridge and Codex resolves those helpers as sibling files. An explicit
-`-RealCodexPath` must point to a directory containing
-`codex-code-mode-host.exe`.
+The default foreground helper calls the installed agmsg `inbox.sh` repeatedly
+inside one blocking tool call. Empty polls stay local and do not start model
+turns. Heartbeat mode is opt-in for delivery after the current turn completes.
+Neither mode starts a watcher or changes the App executable.
 
-The bridge transparently proxies the App's native JSONL stdio and exposes a
-separate loopback WebSocket with only `initialize`, `initialized`,
-`thread/list`, `thread/read`, `thread/loaded/list`, `turn/start`, and
-`turn/steer`. Other app-server methods are rejected. Keeping the real App
-session on stdio preserves Browser Use and in-app Playwright behavior while the
-minimal endpoint handles loaded-thread discovery and monitor delivery.
-
-After a Codex App update, fully quit Codex App and run this from any directory:
+Run updates from any directory:
 
 ```powershell
 codex-monitor update
 ```
 
-The command verifies the latest codex-monitor release checksum, updates
-`codex-monitor.exe`, `cdxm.exe`, and `cdxm-codex-app-bridge.exe`, then refreshes
-the private App-bundled Codex runtime and its matching helpers as one
-rollback-safe transaction. It refuses to mutate files while Codex App or the
-shared bridge is active. Reopen Codex App after the completion message. The
-command does not start, stop, or replace monitor watchers.
+The command verifies the latest release checksum and updates only
+`codex-monitor.exe` and `cdxm.exe`. It preserves an explicit native or otherwise
+unowned `CODEX_CLI_PATH`. A proven-owned legacy bridge is restored to its saved
+environment and its fixed installed files are removed after they are unused.
+The updater never stops App, a watcher, or a CLI process.
 
-After restarting, verify both sides: `cdxm --target app loaded` must include the
-visible thread, and the in-app Browser must navigate to
-`https://www.google.com/` with a non-empty Playwright DOM snapshot. If Browser
-reports a network-policy rejection, remove the bridge and restart App rather
-than trying to bypass that policy.
-
-To restore the prior environment:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -SkipBuild -RemoveAppBridge -Source .
-```
-
-On Windows, `--target app` accepts only a live `codex-app-bridge` marker. It
-does not treat an ordinary Codex CLI app-server process as Codex App. Verify
-after the restart with `cdxm targets` and `cdxm --target app loaded`. Generic
-bridge-proxied `app-server --listen stdio://` processes do not publish App
-markers, so tooling-owned servers cannot make the App target ambiguous.
+On Windows, `--target app` is intentionally unavailable because native App has
+no safe external injection endpoint. Use the three skill shortcuts for App
+delivery. The CLI shim and its app-server endpoint remain independent.
 
 For development-only binary refresh:
 
@@ -317,12 +293,10 @@ On Unix, `--target app` connects to:
 $HOME/.codex/app-server-control/app-server-control.sock
 ```
 
-On Windows, `--target app` discovers the restricted loopback WebSocket listener
-published by the installed Codex App bridge. The App's real app-server remains
-on native stdio. The listener accepts only loaded-thread discovery and
-`turn/start`/`turn/steer` delivery methods, and it refuses ordinary CLI
-app-server processes. If several live bridge endpoints exist, use `--endpoint`
-to select one explicitly.
+On Windows, `--target app` returns an error directing App delivery to
+`$codex-monitor` foreground wait or `$codex-monitor heartbeat`. Native App does
+not expose a safe external injection endpoint. Explicit and CLI-managed
+endpoints remain available.
 
 `--endpoint ws://127.0.0.1:<port>` connects to an explicit loopback WebSocket.
 `--endpoint unix:///path/to/app-server.sock` connects to an explicit Unix

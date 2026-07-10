@@ -64,19 +64,34 @@ fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
 }
 
 #[test]
-fn docs_define_browser_safe_minimal_app_monitor_bridge() {
+fn docs_define_native_app_monitor_shortcuts() {
     let skill = codex_monitor_skill();
     for required in [
-        "native stdio",
-        "thread/loaded/list",
-        "turn/start",
-        "turn/steer",
-        "Browser",
+        "## Codex App Shortcuts",
+        "cdxm-agmsg-foreground.sh",
+        "$codex-monitor heartbeat",
+        "one-minute heartbeat",
+        "automation_update",
+        "$codex-monitor off",
+        "target thread",
+        "No new messages.",
+        "only the installed agmsg scripts",
+        "Never start, stop, kill, restart, replace, or install any watcher or process.",
         "refusing Windows Desktop Codex fallback",
     ] {
         assert!(skill.contains(required), "missing `{required}`");
     }
-    assert!(!skill.contains("as a final fallback"));
+    for forbidden in [
+        "-InstallAppBridge",
+        "-RemoveAppBridge",
+        "cdxm-codex-app-bridge.exe",
+        "enable the app bridge",
+    ] {
+        assert!(
+            !skill.contains(forbidden),
+            "stale App bridge text `{forbidden}`"
+        );
+    }
 }
 
 #[test]
@@ -246,10 +261,12 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("MSVC Build Tools"));
     // The Windows shim now routes through Git Bash.
     assert!(readme.contains("Git Bash"));
-    assert!(readme.contains("-InstallAppBridge"));
-    assert!(readme.contains("-RemoveAppBridge"));
-    assert!(readme.contains("codex-app-bridge"));
-    assert!(readme.contains("codex-code-mode-host.exe"));
+    assert!(readme.contains("$codex-monitor heartbeat"));
+    assert!(readme.contains("$codex-monitor off"));
+    assert!(readme.contains("signed native"));
     assert!(readme.contains("codex-monitor update"));
-    assert!(readme.contains("fully quit Codex App"));
+    assert!(readme.contains("updates only"));
+    assert!(!readme.contains("-InstallAppBridge"));
+    assert!(!readme.contains("-RemoveAppBridge"));
+    assert!(!readme.contains("codex-app-bridge"));
 }

@@ -29,45 +29,98 @@ Keep the product boundary source-agnostic:
 Treat `agmsg` as the first adapter example. Prefer `cdxm monitor watch <adapter>`
 for new workflows; `cdxm agmsg watch ...` is a source-specific shortcut.
 
-## Chat Shortcuts
+## Codex App Shortcuts
 
-When the user sends exactly `$codex-monitor`, treat it as a request to apply the
+These exact shortcuts apply when the current host is Codex App. They keep the
+App on its signed native runtime and use only the installed agmsg scripts as the
+message interface. Never route these shortcuts through `cdxm --target app`, an
+external App launcher, or a background watcher.
+
+Resolve the current persona in this order:
+`--team/--name`, `CDXM_MONITOR_TEAM/CDXM_MONITOR_NAME`, `AGMSG_TEAM/AGMSG_AGENT`,
+`AGMSG_CODEX_NAME`, then the agmsg `codex-name.<project>.<thread>` marker written
+by `/agmsg actas`. Reuse a persona already established in the conversation. If
+no current
+persona can be identified and `whoami.sh <cwd> codex` returns `multiple=true`,
+ask the user to run `/agmsg actas <name>` or send `$codex-monitor <team> <name>`;
+do not pick a persona silently. If the current conversation already established
+the active persona, do not ask again.
+
+### `$codex-monitor`: foreground wait
+
+Keep the current turn alive by running this helper in the foreground through
+Git Bash with the longest supported tool timeout:
+
+```bash
+~/.codex/skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh <team> <name>
+```
+
+The helper suppresses `No new messages.` locally. When it returns messages,
+present each one in the current task as:
+
+```text
+agmsg monitor event
+
+Team: <team>
+Recipient: <name>
+Sender: <sender>
+
+<message>
+```
+
+If a message requires a reply, use the installed agmsg `send.sh`. Then run the
+foreground helper again instead of completing the turn. If the user steers an
+ordinary request into the active turn, answer it and resume the helper. Do not
+start, install, replace, or daemonize a watcher.
+
+### `$codex-monitor heartbeat`: one-minute heartbeat
+
+Use tool discovery to find `automation_update`. Resolve the current Codex
+target thread id. Inspect existing Codex automations read-only and find the
+deterministic current-task name
+`agmsg-<team>-<name>-<thread-id>-codex-monitor`. Update the match instead of
+creating a duplicate; otherwise create one active one-minute heartbeat with
+`targetThreadId` set to the current thread.
+
+The heartbeat prompt must say:
+
+```text
+Use the installed agmsg skill and only its scripts. In <cwd>, run via Git Bash:
+~/.agents/skills/agmsg/scripts/inbox.sh <team> <name>
+If it says "No new messages.", finish silently with no user-facing update. If
+it returns messages, present each one in this current Codex task using the
+agmsg monitor event format. If a message requires a reply, use
+~/.agents/skills/agmsg/scripts/send.sh rather than answering only in chat.
+Never start, stop, kill, restart, replace, or install any watcher or process.
+```
+
+Use `automation_update`; never edit automation TOML directly and never show a
+raw recurrence rule to the user.
+
+### `$codex-monitor off`: current-task cleanup
+
+Treat this steer as normal cancellation of the current foreground tool call.
+Resolve the same team/name and target thread, find the matching deterministic
+heartbeat, and delete only that automation with `automation_update`. A missing
+match is a successful no-op. Do not stop a PID, watcher, CLI consumer, or any
+other task's heartbeat.
+
+## CLI Chat Shortcuts
+
+Outside Codex App, when the user sends exactly `$codex-monitor`, apply the
 codex-monitor agmsg receiver for this Codex session's current persona in the
 current cwd. Multiple Codex sessions in one cwd are supported; do not collapse
-them to a single cwd-level identity.
-Do not explain syntax first. Run:
+them to a single cwd-level identity. Run:
 
 ```bash
 ~/.codex/skills/codex-monitor/scripts/cdxm-agmsg-apply.sh [cwd]
 ```
 
-The helper first resolves explicit arguments/env/session state in this order:
-`--team/--name`, `CDXM_MONITOR_TEAM/CDXM_MONITOR_NAME`, `AGMSG_TEAM/AGMSG_AGENT`,
-`AGMSG_CODEX_NAME`, then the agmsg `codex-name.<project>.<thread>` marker written
-by `/agmsg actas`. It also resolves the current `CODEX_THREAD_ID` or latest
-matching Codex session id and passes `--thread` when available, so multiple Codex
-threads sharing one cwd do not fight over cwd-only delivery. If no current
-persona can be identified and `whoami.sh <cwd> codex` returns `multiple=true`,
-ask the user to run `/agmsg actas <name>` or send `$codex-monitor <team> <name>`;
-do not pick a persona silently. If the current conversation already established
-the active persona for this session, pass it explicitly with `--team/--name`
-instead of asking again. If the user typed `$codex-monitor <team> <name>`, pass
-`--team <team> --name <name>` to the helper.
-
-Treat explicit `$codex-monitor` as intent to prefer codex-monitor over the
-legacy agmsg `codex-bridge` for the same `team/name`. If doctor reports an
-active target consumer with `kind=codex-bridge`, the helper should first prove
-codex-monitor delivery with dry-run, then replace only that same `team/name`
-legacy bridge before foreground watch or LaunchAgent install. Do not stop
-unrelated consumers or other roles. `--dry-run-only` remains read-only, and
+The helper resolves the current thread and persona and passes `--thread` when
+available. Treat explicit CLI apply as intent to replace only the same
+`team/name` legacy bridge after a successful dry-run. Do not stop unrelated
+consumers or other roles. `--dry-run-only` remains read-only, and
 `--no-replace-legacy` keeps the legacy bridge in place.
-
-An active codex-monitor consumer is only current when the pinned `--thread`
-matches the thread selected for this session. If the same `team/name` is already
-running with a different pinned thread, treat it as stale: run dry-run, refresh
-the LaunchAgent with `--force --load`, and use `launch-agent status` /
-`doctor` `desired_thread`, `active_thread`, and `args_match` fields to verify
-the running job actually moved.
 
 When the user sends exactly `$cdxm agmsg` or a terse variant like
 `$cdxm agmsg <team> <name>`, treat it as an operational request to optimize the
@@ -134,53 +187,28 @@ Use `-InstallShim` only when the user explicitly wants the Codex CLI shim:
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -InstallShim
 ```
 
-For the Windows Codex App itself, use the separate reversible native stdio
-monitor bridge. This is required when delivery must reach the exact visible App
-thread without changing the App's Browser policy surface:
+For Windows Codex App, keep `CODEX_CLI_PATH` unset or pointed directly at the
+OpenAI-signed native App-managed `codex.exe`. Never point it at a codex-monitor
+launcher. Use the Codex App shortcuts above for agmsg delivery.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -Source .
-```
-
-The installer must stage both the App-bundled Codex executable and its matching
-`codex-code-mode-host.exe` (plus available command-runner and sandbox helpers)
-in `~/.codex-monitor/runtime`. If `-RealCodexPath` is supplied explicitly, its
-directory must contain the matching code-mode host.
-
-The bridge keeps the App-to-Codex app-server connection on native stdio and
-publishes a separate loopback-only monitor endpoint. That endpoint accepts only
-`initialize`, `initialized`, `thread/list`, `thread/read`,
-`thread/loaded/list`, `turn/start`, and `turn/steer`. Account, remote-control,
-approval, tool, MCP, upload, and download methods are rejected locally. This
-minimal boundary allows monitor delivery without converting the App session to
-a WebSocket app-server, which is required for Browser Use to retain its normal
-network-policy identity.
-
-After Codex App or codex-monitor is updated, fully quit Codex App and run from
-any directory:
+Run the updater from any directory:
 
 ```powershell
 codex-monitor update
 ```
 
-This updates all three codex-monitor executables from a checksum-verified
-Windows release and refreshes the matching private App runtime in one
-rollback-safe transaction. It refuses to run while the App bridge/runtime is
-active, preserves the owned `CODEX_CLI_PATH` / `CDXM_REAL_CODEX` configuration,
-and does not manage watcher lifecycle. Reopen Codex App only after the helper
-prints the completion message.
+This updates `codex-monitor.exe` and `cdxm.exe` from a checksum-verified Windows
+release, preserves an unowned or explicitly native `CODEX_CLI_PATH`, and
+migrates a proven-owned legacy bridge back to its saved environment. A native
+App does not need to be closed. If a legacy bridge executable is still active,
+the updater asks the user to quit App and never stops it itself. The updater
+does not manage foreground waits, heartbeat automations, watchers, or CLI
+consumers.
 
-Restart Codex App, then require `cdxm targets` to show
-`codex-app-bridge` and `cdxm --target app loaded` to include the visible
-thread. An ordinary `codex-app-server-process` endpoint is not a valid App
-target. Apply an agmsg receiver for that exact App endpoint with
-`cdxm-agmsg-apply.sh --target app ...`. Roll back with
-`-SkipBuild -RemoveAppBridge` and another App restart.
-
-After every bridge install or update, also run one in-app Browser acceptance:
-navigate to `https://www.google.com/` and require Playwright to read a non-empty
-DOM snapshot. A browser security-policy rejection means the App did not retain
-its native stdio identity; roll back the bridge instead of bypassing policy.
+On Windows, `--target app` is intentionally unavailable because native App does
+not expose a safe external injection endpoint. Use `$codex-monitor` foreground
+wait or `$codex-monitor heartbeat`. Browser acceptance remains a native App
+check: Google must load with a non-empty Playwright DOM snapshot.
 
 For daily Codex CLI monitor use, confirm the Codex entrypoint is shim-backed:
 
