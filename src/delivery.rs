@@ -4,12 +4,32 @@ use std::time::Duration;
 
 const WATCH_INTERVAL: Duration = Duration::from_secs(2);
 
+enum TargetGuard {
+    Current,
+    Drifted {
+        endpoint: crate::target::Endpoint,
+        thread: String,
+    },
+}
+
 enum DeliveryPass {
     Healthy,
+    TargetDrifted {
+        endpoint: crate::target::Endpoint,
+        thread: String,
+    },
     SessionFailed {
         event_id: String,
         error: anyhow::Error,
     },
+}
+
+struct DeliveryContext<'a> {
+    source: &'a dyn BridgeEventSource,
+    state_key: &'a str,
+    store: &'a crate::state::StateStore,
+    mode: crate::cli::SendMode,
+    thread: &'a str,
 }
 
 pub struct AgmsgWatchOptions {
@@ -125,14 +145,57 @@ pub async fn run_monitor_watch(options: MonitorWatchOptions) -> anyhow::Result<i
         );
 
         loop {
-            let pass = match deliver_available_events(
-                options.source.as_ref(),
-                &options.state_key,
-                &store,
+            let events = match options
+                .source
+                .poll_after(state.last_seen(&options.state_key))
+            {
+                Ok(events) => events,
+                Err(error) => {
+                    let _ = client.close().await;
+                    return Err(error);
+                }
+            };
+            let guard = if events.is_empty() {
+                TargetGuard::Current
+            } else {
+                match revalidate_dynamic_target(
+                    &logical_endpoint,
+                    &requested_thread,
+                    &cwd,
+                    &endpoint,
+                    &thread,
+                )
+                .await
+                {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        eprintln!("monitor target revalidation failed; reconnecting: {error:#}");
+                        let _ = client.close().await;
+                        #[cfg(unix)]
+                        let shutdown =
+                            wait_for_shutdown_or_delay(WATCH_INTERVAL, &mut sigterm).await?;
+                        #[cfg(not(unix))]
+                        let shutdown = wait_for_shutdown_or_delay(WATCH_INTERVAL).await?;
+                        if shutdown {
+                            return Ok(0);
+                        }
+                        continue 'sessions;
+                    }
+                }
+            };
+            let delivery_context = DeliveryContext {
+                source: options.source.as_ref(),
+                state_key: &options.state_key,
+                store: &store,
+                mode: options.mode,
+                thread: &thread,
+            };
+            let pass = match deliver_polled_events(
+                &delivery_context,
+                events,
+                guard,
                 &mut state,
-                options.mode,
                 &mut client,
-                &thread,
             )
             .await
             {
@@ -143,17 +206,34 @@ pub async fn run_monitor_watch(options: MonitorWatchOptions) -> anyhow::Result<i
                 }
             };
 
-            if let DeliveryPass::SessionFailed { event_id, error } = pass {
-                eprintln!("delivery failed for {event_id}; reconnecting: {error:#}");
-                let _ = client.close().await;
-                #[cfg(unix)]
-                let shutdown = wait_for_shutdown_or_delay(WATCH_INTERVAL, &mut sigterm).await?;
-                #[cfg(not(unix))]
-                let shutdown = wait_for_shutdown_or_delay(WATCH_INTERVAL).await?;
-                if shutdown {
-                    return Ok(0);
+            match pass {
+                DeliveryPass::Healthy => {}
+                DeliveryPass::TargetDrifted {
+                    endpoint: current_endpoint,
+                    thread: current_thread,
+                } => {
+                    eprintln!(
+                        "monitor target changed: endpoint={} -> {} thread={} -> {}; reconnecting",
+                        crate::target::endpoint_label(&endpoint),
+                        crate::target::endpoint_label(&current_endpoint),
+                        sanitize_field(&thread),
+                        sanitize_field(&current_thread)
+                    );
+                    let _ = client.close().await;
+                    continue 'sessions;
                 }
-                continue 'sessions;
+                DeliveryPass::SessionFailed { event_id, error } => {
+                    eprintln!("delivery failed for {event_id}; reconnecting: {error:#}");
+                    let _ = client.close().await;
+                    #[cfg(unix)]
+                    let shutdown = wait_for_shutdown_or_delay(WATCH_INTERVAL, &mut sigterm).await?;
+                    #[cfg(not(unix))]
+                    let shutdown = wait_for_shutdown_or_delay(WATCH_INTERVAL).await?;
+                    if shutdown {
+                        return Ok(0);
+                    }
+                    continue 'sessions;
+                }
             }
 
             #[cfg(unix)]
@@ -192,26 +272,77 @@ async fn open_monitor_session(
     Ok((endpoint, thread, client))
 }
 
-async fn deliver_available_events<T: crate::transport::AppServerTransport>(
-    source: &dyn BridgeEventSource,
-    state_key: &str,
-    store: &crate::state::StateStore,
+async fn revalidate_dynamic_target(
+    logical_endpoint: &crate::target::Endpoint,
+    requested_thread: &Option<String>,
+    cwd: &Option<std::path::PathBuf>,
+    connected_endpoint: &crate::target::Endpoint,
+    connected_thread: &str,
+) -> anyhow::Result<TargetGuard> {
+    if !matches!(
+        logical_endpoint,
+        crate::target::Endpoint::App | crate::target::Endpoint::Auto
+    ) {
+        return Ok(TargetGuard::Current);
+    }
+
+    let (resolved_endpoint, resolved_thread) = crate::cli::resolve_endpoint_and_thread(
+        logical_endpoint.clone(),
+        requested_thread.clone(),
+        cwd.clone(),
+    )
+    .await?;
+    Ok(classify_resolved_target(
+        logical_endpoint,
+        connected_endpoint,
+        connected_thread,
+        resolved_endpoint,
+        resolved_thread,
+    ))
+}
+
+fn classify_resolved_target(
+    logical_endpoint: &crate::target::Endpoint,
+    connected_endpoint: &crate::target::Endpoint,
+    connected_thread: &str,
+    resolved_endpoint: crate::target::Endpoint,
+    resolved_thread: String,
+) -> TargetGuard {
+    if !matches!(
+        logical_endpoint,
+        crate::target::Endpoint::App | crate::target::Endpoint::Auto
+    ) || (connected_endpoint == &resolved_endpoint && connected_thread == resolved_thread)
+    {
+        return TargetGuard::Current;
+    }
+
+    TargetGuard::Drifted {
+        endpoint: resolved_endpoint,
+        thread: resolved_thread,
+    }
+}
+
+async fn deliver_polled_events<T: crate::transport::AppServerTransport>(
+    context: &DeliveryContext<'_>,
+    events: Vec<crate::sources::BridgeEvent>,
+    guard: TargetGuard,
     state: &mut crate::state::State,
-    mode: crate::cli::SendMode,
     client: &mut crate::client::AppServerClient<T>,
-    thread: &str,
 ) -> anyhow::Result<DeliveryPass> {
-    let events = source.poll_after(state.last_seen(state_key))?;
+    if let TargetGuard::Drifted { endpoint, thread } = guard {
+        return Ok(DeliveryPass::TargetDrifted { endpoint, thread });
+    }
+
     for event in events {
-        let text = source.format_event_for_turn(&event);
-        if let Err(error) = deliver_event(client, thread, mode, &text).await {
+        let text = context.source.format_event_for_turn(&event);
+        if let Err(error) = deliver_event(client, context.thread, context.mode, &text).await {
             return Ok(DeliveryPass::SessionFailed {
                 event_id: event.event_id,
                 error,
             });
         }
-        state.mark_seen(state_key.to_string(), event.cursor);
-        store.save(state).await?;
+        state.mark_seen(context.state_key.to_string(), event.cursor);
+        context.store.save(state).await?;
     }
     Ok(DeliveryPass::Healthy)
 }
@@ -398,6 +529,75 @@ mod tests {
         assert_eq!(path.file_name().unwrap(), "state.json");
     }
 
+    #[test]
+    fn dynamic_target_drift_is_detected() {
+        let guard = super::classify_resolved_target(
+            &crate::target::Endpoint::App,
+            &crate::target::Endpoint::Explicit("ws://127.0.0.1:60498".into()),
+            "thread-1",
+            crate::target::Endpoint::Explicit("ws://127.0.0.1:56473".into()),
+            "thread-1".into(),
+        );
+
+        assert!(matches!(
+            guard,
+            super::TargetGuard::Drifted {
+                endpoint: crate::target::Endpoint::Explicit(ref endpoint),
+                ref thread,
+            } if endpoint == "ws://127.0.0.1:56473" && thread == "thread-1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn drifted_target_does_not_send_or_advance_state() {
+        let event = BridgeEvent {
+            source: "agmsg".into(),
+            cursor: 43,
+            event_id: "agmsg:dev:codex:43".into(),
+            observed_at: "2026-07-10T00:00:01Z".into(),
+            title: "agmsg from codex".into(),
+            body: "do not send to stale endpoint".into(),
+            cwd_hint: None,
+            reply_hint: None,
+            metadata: BTreeMap::new(),
+        };
+        let source = FixedSource {
+            event: event.clone(),
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::state::StateStore::new(directory.path().join("state.json"));
+        let mut state = crate::state::State::default();
+        let transport = MemoryTransport::new(vec![
+            json!({ "id": 1, "result": { "thread": { "status": { "type": "active" }, "turns": [{ "id": "turn-active", "status": "inProgress" }] } } }),
+            json!({ "id": 2, "result": {} }),
+        ]);
+        let mut client = AppServerClient::new(transport);
+        let context = super::DeliveryContext {
+            source: &source,
+            state_key: "agmsg:dev:codex",
+            store: &store,
+            mode: crate::cli::SendMode::Auto,
+            thread: "thread-1",
+        };
+
+        let pass = super::deliver_polled_events(
+            &context,
+            vec![event],
+            super::TargetGuard::Drifted {
+                endpoint: crate::target::Endpoint::Explicit("ws://127.0.0.1:56473".into()),
+                thread: "thread-1".into(),
+            },
+            &mut state,
+            &mut client,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(pass, super::DeliveryPass::TargetDrifted { .. }));
+        assert_eq!(state.last_seen("agmsg:dev:codex"), 0);
+        assert!(client.into_inner().sent.is_empty());
+    }
+
     #[tokio::test]
     async fn failed_delivery_keeps_cursor_for_retry_until_acknowledged() {
         let event = BridgeEvent {
@@ -430,15 +630,23 @@ mod tests {
             json!({ "id": 2, "error": { "message": "connection reset" } }),
         ]);
         let mut failed_client = AppServerClient::new(failed_transport);
+        let context = super::DeliveryContext {
+            source: &source,
+            state_key: "agmsg:dev:codex",
+            store: &store,
+            mode: crate::cli::SendMode::Auto,
+            thread: "thread-1",
+        };
 
-        let first = super::deliver_available_events(
-            &source,
-            "agmsg:dev:codex",
-            &store,
+        let first_events = source
+            .poll_after(state.last_seen("agmsg:dev:codex"))
+            .unwrap();
+        let first = super::deliver_polled_events(
+            &context,
+            first_events,
+            super::TargetGuard::Current,
             &mut state,
-            crate::cli::SendMode::Auto,
             &mut failed_client,
-            "thread-1",
         )
         .await
         .unwrap();
@@ -462,14 +670,15 @@ mod tests {
         ]);
         let mut successful_client = AppServerClient::new(successful_transport);
 
-        let second = super::deliver_available_events(
-            &source,
-            "agmsg:dev:codex",
-            &store,
+        let second_events = source
+            .poll_after(state.last_seen("agmsg:dev:codex"))
+            .unwrap();
+        let second = super::deliver_polled_events(
+            &context,
+            second_events,
+            super::TargetGuard::Current,
             &mut state,
-            crate::cli::SendMode::Auto,
             &mut successful_client,
-            "thread-1",
         )
         .await
         .unwrap();
