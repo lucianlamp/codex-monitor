@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 
+mod apply;
 mod archive;
 mod model;
 #[cfg(windows)]

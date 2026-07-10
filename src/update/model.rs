@@ -106,6 +106,9 @@ impl UpdateManifest {
         if !self.install_root.is_absolute() || !self.staging_root.is_absolute() {
             bail!("update manifest paths must be absolute");
         }
+        if !self.staging_root.starts_with(&self.install_root) {
+            bail!("update staging directory must be inside the install root");
+        }
 
         let mut seen = BTreeSet::new();
         for file in &self.files {
@@ -121,12 +124,9 @@ impl UpdateManifest {
                 None => {}
             }
         }
-        for required in ManagedFile::ALL
-            .into_iter()
-            .filter(|managed| managed.is_required())
-        {
-            if !seen.contains(&required) {
-                bail!("required update manifest entry is missing: {required:?}");
+        for managed in ManagedFile::ALL {
+            if !seen.contains(&managed) {
+                bail!("update manifest entry is missing: {managed:?}");
             }
         }
         Ok(())
