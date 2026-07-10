@@ -234,6 +234,24 @@ mod tests {
     }
 
     #[test]
+    fn every_minimal_monitor_method_is_forwarded_after_readiness() {
+        let mut router = MonitorRouter::new("bridge-nonce");
+        router.observe_app(&json!({"method":"initialized","params":{}}));
+
+        for (index, method) in ALLOWED_REQUESTS.iter().enumerate() {
+            let request = json!({"id":index + 1,"method":method,"params":{}});
+            let MonitorInput::Forward(forwarded) = router.handle_monitor(4, request) else {
+                panic!("{method} was not forwarded")
+            };
+            assert_eq!(forwarded["method"], *method);
+            assert!(forwarded["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("cdxm:bridge-nonce:4:"));
+        }
+    }
+
+    #[test]
     fn disallowed_methods_server_requests_and_notifications_stay_bounded() {
         let mut router = MonitorRouter::new("bridge-nonce");
         router.observe_app(&json!({"method":"initialized","params":{}}));

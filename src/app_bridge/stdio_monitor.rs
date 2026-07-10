@@ -107,15 +107,19 @@ pub(super) async fn run(real_codex: &Path, args: &[OsString]) -> anyhow::Result<
         server_pid,
         real_codex: real_codex.to_path_buf(),
     };
-    let marker_path = match write_marker_atomic(&marker_dir()?, &marker) {
-        Ok(path) => path,
-        Err(error) => {
-            proxy.abort();
-            let _ = proxy.await;
-            let _ = child.kill().await;
-            return Err(error);
-        }
-    };
+    let marker_path =
+        match marker_dir().and_then(|directory| write_marker_atomic(&directory, &marker)) {
+            Ok(path) => path,
+            Err(error) => {
+                proxy.abort();
+                let _ = proxy.await;
+                if child.try_wait().ok().flatten().is_none() {
+                    let _ = child.start_kill();
+                }
+                let _ = child.wait().await;
+                return Err(error);
+            }
+        };
     let _marker_guard = MarkerGuard(marker_path);
 
     loop {
@@ -156,7 +160,12 @@ async fn finish_owned_child(
             break status;
         }
         if tokio::time::Instant::now() >= deadline {
-            child.kill().await?;
+            if let Err(error) = child.start_kill() {
+                if let Some(status) = child.try_wait()? {
+                    break status;
+                }
+                return Err(error).context("failed to stop owned Codex app-server");
+            }
             break child.wait().await?;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
