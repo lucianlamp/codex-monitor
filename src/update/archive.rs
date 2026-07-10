@@ -1,4 +1,4 @@
-use super::model::{sha256_bytes, sha256_file, ManagedFile, StagedFile};
+use super::model::{sha256_bytes, sha256_file, ManagedFile, ReleasePlatform, StagedFile};
 use anyhow::{bail, Context};
 use std::{
     collections::BTreeSet,
@@ -8,7 +8,6 @@ use std::{
 };
 use zip::ZipArchive;
 
-pub const WINDOWS_ARCHIVE: &str = "codex-monitor-x86_64-pc-windows-msvc.zip";
 const MAX_ARCHIVE_BYTES: usize = 128 * 1024 * 1024;
 
 pub fn parse_checksum(text: &str) -> anyhow::Result<String> {
@@ -28,6 +27,7 @@ pub fn verify_sha256(bytes: &[u8], expected: &str) -> anyhow::Result<()> {
 }
 
 pub fn extract_release_zip(bytes: &[u8], destination: &Path) -> anyhow::Result<Vec<StagedFile>> {
+    let platform = ReleasePlatform::WindowsX64;
     let declared_entries = declared_zip_entry_count(bytes)?;
     if declared_entries != ManagedFile::RELEASE.len() {
         bail!(
@@ -60,13 +60,13 @@ pub fn extract_release_zip(bytes: &[u8], destination: &Path) -> anyhow::Result<V
         {
             bail!("release ZIP contains a non-top-level file: {name}");
         }
-        let id = ManagedFile::from_release_name(&name)
+        let id = ManagedFile::from_release_name(&name, platform)
             .with_context(|| format!("release ZIP contains an unexpected file: {name}"))?;
         if !seen.insert(id) {
             bail!("release ZIP contains a duplicate file: {name}");
         }
 
-        let output_path = destination.join(id.staged_name());
+        let output_path = destination.join(id.staged_name(platform));
         let mut output = File::create(&output_path)
             .with_context(|| format!("failed to create staged file {}", output_path.display()))?;
         std::io::copy(&mut entry, &mut output)
@@ -84,7 +84,7 @@ pub fn extract_release_zip(bytes: &[u8], destination: &Path) -> anyhow::Result<V
         if !seen.contains(&required) {
             bail!(
                 "release ZIP is missing required file: {}",
-                required.staged_name()
+                required.staged_name(platform)
             );
         }
     }
@@ -127,7 +127,7 @@ pub async fn download_latest_release(
     destination: &Path,
 ) -> anyhow::Result<Vec<StagedFile>> {
     let base = release_base.trim_end_matches('/');
-    let archive_url = format!("{base}/{WINDOWS_ARCHIVE}");
+    let archive_url = format!("{base}/{}", ReleasePlatform::WindowsX64.archive_name());
     let checksum_url = format!("{archive_url}.sha256");
     let client = reqwest::Client::builder()
         .build()

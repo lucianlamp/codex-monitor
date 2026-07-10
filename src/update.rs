@@ -45,9 +45,10 @@ pub fn report_previous_failure() -> Result<()> {
 
 #[cfg(windows)]
 async fn run_update_windows() -> Result<i32> {
-    use model::{UpdateManifest, MANIFEST_VERSION};
+    use model::{ReleasePlatform, UpdateManifest, MANIFEST_VERSION};
     use std::process::{Command, Stdio};
 
+    let platform = ReleasePlatform::current()?;
     let preflight = windows::preflight()?;
     std::fs::create_dir_all(&preflight.paths.root).with_context(|| {
         format!(
@@ -75,11 +76,12 @@ async fn run_update_windows() -> Result<i32> {
 
     let manifest = UpdateManifest {
         version: MANIFEST_VERSION,
+        platform,
         install_root: preflight.paths.root.clone(),
         staging_root: staging_root.clone(),
         files,
     };
-    manifest.validate_shape()?;
+    manifest.validate_for(platform)?;
     let manifest_path = staging_root.join("manifest.json");
     write_manifest_atomic(&manifest_path, &manifest)?;
 
@@ -110,7 +112,7 @@ async fn run_update_windows() -> Result<i32> {
 
 #[cfg(windows)]
 fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
-    use model::{UpdateManifest, UpdateResult, RESULT_VERSION};
+    use model::{ReleasePlatform, UpdateManifest, UpdateResult, RESULT_VERSION};
 
     let expected_paths = windows::install_paths()?;
     let apply_result = (|| -> Result<apply::ApplySummary> {
@@ -125,7 +127,7 @@ fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
         })?;
         let manifest: UpdateManifest =
             serde_json::from_slice(&bytes).context("staged update manifest is not valid JSON")?;
-        manifest.validate_shape()?;
+        manifest.validate_for(ReleasePlatform::current()?)?;
         if !windows::paths_equal(&manifest.install_root, &expected_paths.root) {
             anyhow::bail!("update manifest install root does not match this installation");
         }

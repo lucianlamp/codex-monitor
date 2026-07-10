@@ -64,11 +64,13 @@ where
         let file = files
             .get(&id)
             .expect("manifest shape validation requires every managed file");
-        let destination = id.destination(&manifest.install_root);
-        let backup = backup_root.join(id.staged_name());
+        let destination = id.destination(&manifest.install_root, manifest.platform);
+        let backup = backup_root.join(id.staged_name(manifest.platform));
         match file.sha256.as_deref() {
             Some(expected_hash) => {
-                let staged = manifest.staging_root.join(id.staged_name());
+                let staged = manifest
+                    .staging_root
+                    .join(id.staged_name(manifest.platform));
                 let staged_hash = sha256_file(&staged)
                     .with_context(|| format!("failed to validate staged update file for {id:?}"))?;
                 if staged_hash != expected_hash {
@@ -90,8 +92,10 @@ where
                 std::fs::create_dir_all(parent).with_context(|| {
                     format!("failed to create update destination {}", parent.display())
                 })?;
-                let prepared =
-                    parent.join(format!(".cdxm-update-new-{suffix}-{}", id.staged_name()));
+                let prepared = parent.join(format!(
+                    ".cdxm-update-new-{suffix}-{}",
+                    id.staged_name(manifest.platform)
+                ));
                 std::fs::copy(&staged, &prepared).with_context(|| {
                     format!(
                         "failed to prepare update file {} from {}",
@@ -239,7 +243,9 @@ pub fn cleanup_ready_backups(install_root: &Path) -> anyhow::Result<Vec<PathBuf>
 
 fn verify_installed_state(manifest: &UpdateManifest) -> anyhow::Result<()> {
     for file in &manifest.files {
-        let destination = file.id.destination(&manifest.install_root);
+        let destination = file
+            .id
+            .destination(&manifest.install_root, manifest.platform);
         match file.sha256.as_deref() {
             Some(expected) => {
                 let actual = sha256_file(&destination)?;
@@ -359,8 +365,8 @@ pub fn take_previous_failure(path: &Path) -> anyhow::Result<Option<String>> {
 mod tests {
     use super::*;
     use crate::update::model::{
-        sha256_file, ManagedFile, StagedFile, UpdateManifest, UpdateResult, MANIFEST_VERSION,
-        RESULT_VERSION,
+        sha256_file, ManagedFile, ReleasePlatform, StagedFile, UpdateManifest, UpdateResult,
+        MANIFEST_VERSION, RESULT_VERSION,
     };
     use tempfile::TempDir;
 
@@ -376,10 +382,10 @@ mod tests {
         std::fs::create_dir_all(&staging_root).unwrap();
         let mut files = Vec::new();
         for id in ManagedFile::ALL {
-            let destination = id.destination(&install_root);
+            let destination = id.destination(&install_root, ReleasePlatform::WindowsX64);
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
             std::fs::write(&destination, format!("old-{id:?}")).unwrap();
-            let staged = staging_root.join(id.staged_name());
+            let staged = staging_root.join(id.staged_name(ReleasePlatform::WindowsX64));
             std::fs::write(&staged, format!("new-{id:?}")).unwrap();
             let sha256 = Some(sha256_file(&staged).unwrap());
             files.push(StagedFile { id, sha256 });
@@ -387,6 +393,7 @@ mod tests {
         Fixture {
             manifest: UpdateManifest {
                 version: MANIFEST_VERSION,
+                platform: ReleasePlatform::WindowsX64,
                 install_root,
                 staging_root,
                 files,
@@ -402,8 +409,11 @@ mod tests {
         assert_eq!(summary.changed, 1);
         assert_eq!(summary.removed, 0);
         assert_eq!(
-            std::fs::read(ManagedFile::CodexMonitor.destination(&fixture.manifest.install_root))
-                .unwrap(),
+            std::fs::read(
+                ManagedFile::CodexMonitor
+                    .destination(&fixture.manifest.install_root, fixture.manifest.platform,)
+            )
+            .unwrap(),
             b"new-CodexMonitor"
         );
     }
@@ -412,8 +422,16 @@ mod tests {
     fn apply_skips_identical_files_without_leaving_backups() {
         let fixture = fixture();
         for file in &fixture.manifest.files {
-            let staged = fixture.manifest.staging_root.join(file.id.staged_name());
-            std::fs::copy(&staged, file.id.destination(&fixture.manifest.install_root)).unwrap();
+            let staged = fixture
+                .manifest
+                .staging_root
+                .join(file.id.staged_name(fixture.manifest.platform));
+            std::fs::copy(
+                &staged,
+                file.id
+                    .destination(&fixture.manifest.install_root, fixture.manifest.platform),
+            )
+            .unwrap();
         }
         let summary = apply_manifest(&fixture.manifest).unwrap();
         assert_eq!(summary.unchanged, ManagedFile::ALL.len());
@@ -439,7 +457,10 @@ mod tests {
         assert!(result.is_err());
         for id in ManagedFile::ALL {
             assert_eq!(
-                std::fs::read(id.destination(&fixture.manifest.install_root)).unwrap(),
+                std::fs::read(
+                    id.destination(&fixture.manifest.install_root, fixture.manifest.platform,)
+                )
+                .unwrap(),
                 format!("old-{id:?}").as_bytes()
             );
         }

@@ -8,8 +8,42 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const MANIFEST_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 2;
 pub const RESULT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReleasePlatform {
+    WindowsX64,
+    MacArm64,
+    MacX64,
+}
+
+impl ReleasePlatform {
+    pub fn current() -> anyhow::Result<Self> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("windows", "x86_64") => Ok(Self::WindowsX64),
+            ("macos", "aarch64" | "arm64") => Ok(Self::MacArm64),
+            ("macos", "x86_64") => Ok(Self::MacX64),
+            (os, arch) => bail!("codex-monitor update is unsupported on {os}/{arch}"),
+        }
+    }
+
+    pub fn archive_name(self) -> &'static str {
+        match self {
+            Self::WindowsX64 => "codex-monitor-x86_64-pc-windows-msvc.zip",
+            Self::MacArm64 => "codex-monitor-aarch64-apple-darwin.tar.gz",
+            Self::MacX64 => "codex-monitor-x86_64-apple-darwin.tar.gz",
+        }
+    }
+
+    pub fn executable_name(self) -> &'static str {
+        match self {
+            Self::WindowsX64 => "codex-monitor.exe",
+            Self::MacArm64 | Self::MacX64 => "codex-monitor",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -22,16 +56,16 @@ impl ManagedFile {
 
     pub const RELEASE: [Self; 1] = Self::ALL;
 
-    pub fn destination(self, install_root: &Path) -> PathBuf {
+    pub fn destination(self, install_root: &Path, platform: ReleasePlatform) -> PathBuf {
         let (directory, name) = match self {
-            Self::CodexMonitor => ("bin", "codex-monitor.exe"),
+            Self::CodexMonitor => ("bin", platform.executable_name()),
         };
         install_root.join(directory).join(name)
     }
 
-    pub fn staged_name(self) -> &'static str {
+    pub fn staged_name(self, platform: ReleasePlatform) -> &'static str {
         match self {
-            Self::CodexMonitor => "codex-monitor.exe",
+            Self::CodexMonitor => platform.executable_name(),
         }
     }
 
@@ -39,10 +73,10 @@ impl ManagedFile {
         true
     }
 
-    pub fn from_release_name(name: &str) -> Option<Self> {
+    pub fn from_release_name(name: &str, platform: ReleasePlatform) -> Option<Self> {
         Self::RELEASE
             .into_iter()
-            .find(|managed| managed.staged_name() == name)
+            .find(|managed| managed.staged_name(platform) == name)
     }
 }
 
@@ -57,12 +91,25 @@ pub struct StagedFile {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateManifest {
     pub version: u32,
+    pub platform: ReleasePlatform,
     pub install_root: PathBuf,
     pub staging_root: PathBuf,
     pub files: Vec<StagedFile>,
 }
 
 impl UpdateManifest {
+    pub fn validate_for(&self, platform: ReleasePlatform) -> anyhow::Result<()> {
+        self.validate_shape()?;
+        if self.platform != platform {
+            bail!(
+                "update manifest platform mismatch: expected {:?}, found {:?}",
+                platform,
+                self.platform
+            );
+        }
+        Ok(())
+    }
+
     pub fn validate_shape(&self) -> anyhow::Result<()> {
         if self.version != MANIFEST_VERSION {
             bail!("unsupported update manifest version {}", self.version);
@@ -163,12 +210,41 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn managed_files_map_only_to_fixed_destinations() {
-        let root = Path::new(r"C:\Users\me\.codex-monitor");
+    fn release_platform_maps_assets_and_destinations() {
+        let root = Path::new("/tmp/codex-monitor");
         assert_eq!(
-            ManagedFile::CodexMonitor.destination(root),
+            ReleasePlatform::MacArm64.archive_name(),
+            "codex-monitor-aarch64-apple-darwin.tar.gz"
+        );
+        assert_eq!(
+            ReleasePlatform::MacX64.archive_name(),
+            "codex-monitor-x86_64-apple-darwin.tar.gz"
+        );
+        assert_eq!(
+            ManagedFile::CodexMonitor.destination(root, ReleasePlatform::MacArm64),
+            root.join("bin/codex-monitor")
+        );
+        assert_eq!(
+            ManagedFile::CodexMonitor.destination(root, ReleasePlatform::WindowsX64),
             root.join("bin/codex-monitor.exe")
         );
+    }
+
+    #[test]
+    fn manifest_rejects_a_platform_mismatch() {
+        let root = std::env::current_dir().unwrap();
+        let manifest = UpdateManifest {
+            version: MANIFEST_VERSION,
+            platform: ReleasePlatform::MacArm64,
+            install_root: root.join("install"),
+            staging_root: root.join("install").join("staging"),
+            files: vec![StagedFile {
+                id: ManagedFile::CodexMonitor,
+                sha256: Some("a".repeat(64)),
+            }],
+        };
+        assert!(manifest.validate_for(ReleasePlatform::MacArm64).is_ok());
+        assert!(manifest.validate_for(ReleasePlatform::WindowsX64).is_err());
     }
 
     #[test]
@@ -190,6 +266,7 @@ mod tests {
             .collect::<Vec<_>>();
         let manifest = UpdateManifest {
             version: MANIFEST_VERSION,
+            platform: ReleasePlatform::WindowsX64,
             install_root: root.join("install"),
             staging_root: root.join("install").join("staging"),
             files: files.clone(),
