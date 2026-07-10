@@ -95,7 +95,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -Ins
 ```
 
 The installer preserves prior user-level `CODEX_CLI_PATH` and
-`CDXM_REAL_CODEX` values. To restore them:
+`CDXM_REAL_CODEX` values. It copies the selected App-bundled Codex executable
+to `~/.codex-monitor/runtime/codex-app-real.exe`, because WindowsApps package
+executables cannot be launched directly by the external bridge. Rerun the
+bridge install after a Codex App update. To restore the prior environment:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -SkipBuild -RemoveAppBridge -Source .

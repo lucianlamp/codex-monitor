@@ -210,7 +210,9 @@ function Disable-CdxmAppBridge {}
 Persist the original user environment values in
 `$InstallRoot\app-bridge-env.json` before the first enable. Set
 `CODEX_CLI_PATH` to `$BinDir\cdxm-codex-app-bridge.exe` and
-`CDXM_REAL_CODEX` to the resolved real executable. Removal restores the backup
+copy the resolved executable to
+`$InstallRoot\runtime\codex-app-real.exe` before setting `CDXM_REAL_CODEX` to
+that managed copy. Removal restores the backup
 only when the active `CODEX_CLI_PATH` still equals the installed bridge; an
 unrelated later user override is preserved with a warning.
 

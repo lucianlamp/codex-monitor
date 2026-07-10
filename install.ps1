@@ -22,6 +22,7 @@ $BinDir = Join-Path $InstallRoot 'bin'
 $ShimTarget = Join-Path $AgentsBin 'codex.cmd'
 $AppBridgeTarget = Join-Path $BinDir 'cdxm-codex-app-bridge.exe'
 $AppBridgeEnvBackup = Join-Path $InstallRoot 'app-bridge-env.json'
+$ManagedRealCodex = Join-Path $InstallRoot 'runtime\codex-app-real.exe'
 $TempDir = $null
 
 if ($InstallAppBridge.IsPresent -and $RemoveAppBridge.IsPresent) {
@@ -279,6 +280,13 @@ function Enable-CdxmAppBridge {
     if (-not (Test-Path -LiteralPath $AppBridgeTarget -PathType Leaf)) {
         throw "Codex App bridge binary is missing: $AppBridgeTarget"
     }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ManagedRealCodex) | Out-Null
+    if ([IO.Path]::GetFullPath($ResolvedRealCodexPath) -ine [IO.Path]::GetFullPath($ManagedRealCodex)) {
+        # Packaged WindowsApps executables are readable but cannot be launched by
+        # the external bridge. Keep a private executable copy with the matching
+        # Codex App version in the codex-monitor runtime.
+        Copy-Item -LiteralPath $ResolvedRealCodexPath -Destination $ManagedRealCodex -Force
+    }
     if (-not (Test-Path -LiteralPath $AppBridgeEnvBackup)) {
         Write-Host 'Preserving the current user environment before enabling the Codex App bridge.'
         $backup = [ordered]@{
@@ -292,11 +300,11 @@ function Enable-CdxmAppBridge {
     }
 
     [Environment]::SetEnvironmentVariable('CODEX_CLI_PATH', $AppBridgeTarget, 'User')
-    [Environment]::SetEnvironmentVariable('CDXM_REAL_CODEX', $ResolvedRealCodexPath, 'User')
+    [Environment]::SetEnvironmentVariable('CDXM_REAL_CODEX', $ManagedRealCodex, 'User')
     Set-ProcessEnvironmentValue 'CODEX_CLI_PATH' $AppBridgeTarget
-    Set-ProcessEnvironmentValue 'CDXM_REAL_CODEX' $ResolvedRealCodexPath
+    Set-ProcessEnvironmentValue 'CDXM_REAL_CODEX' $ManagedRealCodex
     Write-Host "Enabled Codex App bridge: CODEX_CLI_PATH=$AppBridgeTarget"
-    Write-Host "Real Codex executable: $ResolvedRealCodexPath"
+    Write-Host "Real Codex executable: $ManagedRealCodex"
     Write-Host 'Codex App must be restarted before the shared app-server is active.'
 }
 
@@ -319,6 +327,7 @@ function Disable-CdxmAppBridge {
     Set-ProcessEnvironmentValue 'CODEX_CLI_PATH' $previousCli
     Set-ProcessEnvironmentValue 'CDXM_REAL_CODEX' $previousReal
     Remove-Item -LiteralPath $AppBridgeEnvBackup -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ManagedRealCodex -Force -ErrorAction SilentlyContinue
     Write-Host 'Disabled Codex App bridge and restored the previous user environment.'
     Write-Host 'Codex App must be restarted before the change takes effect.'
 }

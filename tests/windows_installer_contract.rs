@@ -122,6 +122,7 @@ fn windows_installer_manages_codex_app_bridge_reversibly() {
         "[switch]$RemoveAppBridge",
         "[string]$RealCodexPath",
         "cdxm-codex-app-bridge.exe",
+        "codex-app-real.exe",
         "app-bridge-env.json",
         "CODEX_CLI_PATH",
         "CDXM_REAL_CODEX",
@@ -135,6 +136,8 @@ fn windows_installer_manages_codex_app_bridge_reversibly() {
     }
     assert!(installer.contains("InstallAppBridge.IsPresent -and $RemoveAppBridge.IsPresent"));
     assert!(installer.contains("Test-CdxmOwnedAppBridge"));
+    assert!(installer
+        .contains("Copy-Item -LiteralPath $ResolvedRealCodexPath -Destination $ManagedRealCodex"));
     assert!(installer.contains("Preserving the current user environment"));
     assert!(installer.contains("Codex App must be restarted"));
 }

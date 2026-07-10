@@ -79,6 +79,8 @@ source remains distinct from the marker-backed `codex-app-bridge` endpoint.
 
 - installs all three binaries;
 - records the real Codex path;
+- copies that executable into the codex-monitor runtime because WindowsApps
+  package executables cannot be launched directly by the external bridge;
 - preserves any prior user-level `CODEX_CLI_PATH` value;
 - sets user-level `CODEX_CLI_PATH` to the bridge;
 - prints that Codex App must be restarted.
