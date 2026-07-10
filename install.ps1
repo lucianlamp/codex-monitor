@@ -125,7 +125,7 @@ function Install-CdxmPrebuilt {
     # tampered archive cannot drop extra files or traverse outside $BinDir
     # (Zip Slip). Mirrors the bash shim's named-member tar extraction.
     try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue } catch { }
-    $allowed = @('codex-monitor.exe', 'cdxm.exe')
+    $allowed = @('codex-monitor.exe', 'cdxm.exe', 'cdxm-codex-app-bridge.exe')
     $zipFile = [System.IO.Compression.ZipFile]::OpenRead($zip)
     try {
         foreach ($entry in $zipFile.Entries) {
@@ -138,7 +138,8 @@ function Install-CdxmPrebuilt {
         $zipFile.Dispose()
     }
     if (-not (Test-Path (Join-Path $BinDir 'codex-monitor.exe')) -or
-        -not (Test-Path (Join-Path $BinDir 'cdxm.exe'))) {
+        -not (Test-Path (Join-Path $BinDir 'cdxm.exe')) -or
+        -not (Test-Path (Join-Path $BinDir 'cdxm-codex-app-bridge.exe'))) {
         Write-Host "Prebuilt archive did not contain the expected binaries; falling back to source build."
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
         return $false

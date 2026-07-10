@@ -38,3 +38,12 @@ fn release_workflow_packages_fixed_asset_names_with_checksums() {
     // attaches to a GitHub release
     assert!(wf.contains("softprops/action-gh-release"));
 }
+
+#[test]
+fn windows_release_packages_app_bridge() {
+    let wf = workflow();
+    assert!(wf.contains("release/cdxm-codex-app-bridge.exe"));
+    assert!(
+        wf.contains("Copy-Item \"target/${{ matrix.target }}/release/cdxm-codex-app-bridge.exe\"")
+    );
+}

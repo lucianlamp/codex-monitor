@@ -167,6 +167,9 @@ fn windows_installer_has_prebuilt_download_path() {
     assert!(installer.contains("x86_64-pc-windows-msvc.zip"));
     assert!(installer.contains("Get-FileHash"));
     assert!(installer.contains("BuildFromSource"));
+    assert!(installer
+        .contains("$allowed = @('codex-monitor.exe', 'cdxm.exe', 'cdxm-codex-app-bridge.exe')"));
+    assert!(installer.contains("Join-Path $BinDir 'cdxm-codex-app-bridge.exe'"));
 }
 
 #[test]

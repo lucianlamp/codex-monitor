@@ -51,6 +51,7 @@ jobs:
           $staging = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "stage")
           Copy-Item "target/${{ matrix.target }}/release/codex-monitor.exe" $staging
           Copy-Item "target/${{ matrix.target }}/release/cdxm.exe" $staging
+          Copy-Item "target/${{ matrix.target }}/release/cdxm-codex-app-bridge.exe" $staging
           Compress-Archive -Path (Join-Path $staging '*') -DestinationPath "$name.zip" -Force
           (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline "$name.zip.sha256"
       - name: Upload to release
