@@ -261,6 +261,10 @@ or delivery failures. Before sending a pending event, `--target app` and
 thread drifted, the watcher closes it without sending or saving the cursor,
 even when the old app-server still responds, then reconnects and retries the
 same event. Explicit and managed targets do not add this discovery probe.
+For `--target app --thread <id>`, resolve the current App bridge first, then
+verify the pinned thread on the new connection. Retry without calling
+`thread/resume` until the App reports it loaded; do not retain the old endpoint
+merely because the replacement has not listed the thread yet.
 App-server ack and saved state do not prove the current Codex
 UI rendered a separate bubble: active-turn `turn/steer` input may reach the
 model without one. Verify model receipt in the intended loaded thread; test a

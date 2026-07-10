@@ -173,7 +173,7 @@ unique token reaches the current model turn
 
 Only after these checks may the drift fix be considered complete and PR #7 be marked Ready.
 
-### Task 3: Let a pinned App watcher restore its thread after restart
+### Task 3: Resolve the current App bridge before verifying a pinned thread
 
 **Files:**
 - Modify: `src/delivery.rs`
@@ -181,7 +181,7 @@ Only after these checks may the drift fix be considered complete and PR #7 be ma
 
 - [x] **Step 1: Add a failing pinned-App resolution test**
 
-Add a focused unit test proving that `Endpoint::App` plus an explicit thread uses the current unique App bridge directly, while `Auto`, `Managed`, `Explicit`, and App-without-thread continue through loaded-thread resolution.
+Add a focused unit test proving that `Endpoint::App` plus an explicit thread resolves the current unique App bridge before checking loaded state, while `Auto`, `Managed`, `Explicit`, and App-without-thread continue through loaded-thread resolution.
 
 - [x] **Step 2: Verify the new test is red**
 
@@ -189,7 +189,7 @@ Run the exact focused test and require it to fail because the monitor-specific p
 
 - [x] **Step 3: Resolve the App bridge before requiring loaded state**
 
-For live monitor session setup and dynamic revalidation only, resolve `--target app --thread <id>` to the current App bridge and retain the requested thread. Open the bridge first, then rely on the existing `ensure_thread_loaded` call to restore that pinned thread. Keep `auto`, `managed`, and explicit endpoint behavior unchanged.
+For live monitor session setup and dynamic revalidation only, resolve `--target app --thread <id>` to the current App bridge and retain the requested thread. Open the bridge first, then use the existing `ensure_thread_loaded` call to verify the pinned thread without calling `thread/resume`. Keep `auto`, `managed`, and explicit endpoint behavior unchanged.
 
 - [ ] **Step 4: Verify, install, and repeat the live restart acceptance**
 

@@ -1,7 +1,7 @@
 # Codex Monitor Reconnect and Steer Delivery Design
 
 **Date:** 2026-07-10  
-**Status:** Endpoint-drift guard implemented; live restart acceptance pending
+**Status:** Drift guard accepted; pinned-App endpoint ordering pending repeat live restart
 
 ## Context
 
@@ -102,11 +102,13 @@ this approach is rejected.
 `run_monitor_watch` keeps an immutable copy of the requested logical endpoint,
 thread id, and cwd. A session setup function performs these steps each time:
 
-1. Resolve the logical endpoint to the current concrete endpoint.
-2. Resolve or validate the pinned thread on that endpoint.
-3. Open the transport.
-4. Send `initialize` and `initialized`.
-5. Confirm that the target thread is loaded without calling `thread/resume`.
+1. Resolve the logical endpoint and requested thread. For a pinned `app`
+   target, select the current unique App bridge without requiring the thread to
+   appear in its loaded list first; other target kinds keep their existing
+   loaded-thread selection.
+2. Open the transport.
+3. Send `initialize` and `initialized`.
+4. Confirm that the target thread is loaded without calling `thread/resume`.
 
 If setup fails, the watcher logs one concise reconnect message, waits two
 seconds, and retries. It does not advance source state.
@@ -116,7 +118,8 @@ seconds, and retries. It does not advance source state.
 After source polling returns at least one pending event, but before formatting
 or sending that event, the watcher re-resolves dynamic logical targets:
 
-- `app` resolves the currently live App bridge endpoint;
+- `app` resolves the currently live App bridge endpoint before validating a
+  pinned thread on that replacement connection;
 - `auto` repeats loaded-thread selection for the requested thread or cwd;
 - `explicit` and `managed` keep their existing session without an additional
   probe.
@@ -200,6 +203,23 @@ The live Windows acceptance test is:
 6. Confirm from the current model turn that the unique message text was
    received. A separate visible App bubble is not required for this active-turn
    case.
+
+Live acceptance completed on 2026-07-10:
+
+- watcher PID `51852`, started before the App restart, remained alive;
+- the old endpoint `ws://127.0.0.1:56473` remained responsive while the new
+  App bridge published `ws://127.0.0.1:51712`;
+- the same watcher PID established its TCP connection to port `51712`;
+- doctor resolved thread `019f499f-981b-7613-b5cb-8a4d5cdba90b` on `51712`;
+- agmsg event `7356`, token `[cdxm-driftguard-live-20260710-184102]`, reached
+  the current model turn; and
+- state advanced exactly to `7356` with `pending_after_state_count=0`.
+
+The manually started watcher did not retain stderr to a file, so reconnect was
+proved with the surviving process identity, old and new live endpoint
+processes, the watcher's established TCP peer, doctor thread resolution, cursor
+advancement, and receipt of the unique model-turn token rather than a saved log
+line.
 
 ## Documentation
 

@@ -525,6 +525,13 @@ watcher rejects the old session even when it still responds, reconnects, and
 retries from the unchanged source cursor. Explicit and managed targets do not
 add this discovery probe.
 
+For `--target app --thread <id>`, the watcher resolves the current unique App
+bridge before checking whether that bridge reports the pinned thread as loaded.
+It then performs the loaded-thread check on the new connection and retries
+without calling `thread/resume` until the App reports the thread. This prevents
+a still-responsive old App session from remaining the selected endpoint during
+restart.
+
 App-server ack and codex-monitor state advancement mean the app-server accepted the
 delivery. They do not prove that the current Codex UI rendered a visible
 message. In particular, active-turn `turn/steer` input may reach the model
