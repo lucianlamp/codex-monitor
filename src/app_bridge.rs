@@ -13,6 +13,8 @@ use tokio_tungstenite::tungstenite::{protocol::WebSocketConfig, Message};
 
 use crate::target::{Endpoint, EndpointCandidate};
 
+mod monitor_router;
+
 pub const APP_BRIDGE_MARKER_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
