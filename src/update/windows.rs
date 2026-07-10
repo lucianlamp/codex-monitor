@@ -1,8 +1,8 @@
 use super::model::{sha256_file, InstallPaths, ManagedFile, StagedFile};
 use anyhow::{bail, Context};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     ffi::OsStr,
     path::{Path, PathBuf},
     process::Command,
@@ -19,6 +19,7 @@ $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     installLocation = if ($package) { $package.InstallLocation } else { $null }
     userCodexCliPath = [Environment]::GetEnvironmentVariable('CODEX_CLI_PATH', 'User')
     userRealCodex = [Environment]::GetEnvironmentVariable('CDXM_REAL_CODEX', 'User')
+    userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     processes = $processes
 } | ConvertTo-Json -Compress
 "#;
@@ -30,6 +31,7 @@ struct WindowsInventory {
     user_codex_cli_path: Option<PathBuf>,
     #[allow(dead_code)]
     user_real_codex: Option<PathBuf>,
+    user_path: Option<String>,
     #[serde(default)]
     processes: Vec<String>,
 }
@@ -39,6 +41,13 @@ struct WindowsInventory {
 struct AppBridgeBackup {
     version: u32,
     bridge_path: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserPathBackup<'a> {
+    version: u32,
+    user_path: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -191,10 +200,18 @@ pub fn reassert_owned_environment(paths: &InstallPaths) -> anyhow::Result<()> {
     verify_owned_bridge(paths, &backup, user_bridge)?;
 
     let real_codex = paths.destination(ManagedFile::RealCodex);
+    let (preferred_path_entries, removed_path_entries) = public_cli_path_entries(paths)?;
+    preserve_user_path_backup(paths, inventory.user_path.as_deref())?;
+    let user_path = normalize_user_path(
+        inventory.user_path.as_deref(),
+        &preferred_path_entries,
+        &removed_path_entries,
+    );
     let script = r#"
 $ErrorActionPreference = 'Stop'
 [Environment]::SetEnvironmentVariable('CODEX_CLI_PATH', $env:CDXM_UPDATE_BRIDGE, 'User')
 [Environment]::SetEnvironmentVariable('CDXM_REAL_CODEX', $env:CDXM_UPDATE_REAL_CODEX, 'User')
+[Environment]::SetEnvironmentVariable('Path', $env:CDXM_UPDATE_USER_PATH, 'User')
 "#;
     let output = Command::new(windows_powershell_executable())
         .args([
@@ -208,6 +225,7 @@ $ErrorActionPreference = 'Stop'
         ])
         .env("CDXM_UPDATE_BRIDGE", &expected_bridge)
         .env("CDXM_UPDATE_REAL_CODEX", &real_codex)
+        .env("CDXM_UPDATE_USER_PATH", &user_path)
         .output()
         .context("failed to start PowerShell environment update")?;
     require_powershell_success(output, "updating the owned Codex App environment")?;
@@ -307,6 +325,104 @@ fn blocks_update_process(name: &str) -> bool {
     ["cdxm-codex-app-bridge.exe", "codex-app-real.exe"]
         .iter()
         .any(|blocked| name.eq_ignore_ascii_case(blocked))
+}
+
+fn public_cli_path_entries(paths: &InstallPaths) -> anyhow::Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let base = directories::BaseDirs::new()
+        .context("could not resolve the current user's home directory")?;
+    let app_data = std::env::var_os("APPDATA").context("APPDATA is not set")?;
+    let local_app_data = std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is not set")?;
+    Ok((
+        vec![
+            base.home_dir().join(".agents").join("bin"),
+            paths.root.join("bin"),
+            PathBuf::from(app_data).join("npm"),
+        ],
+        vec![PathBuf::from(local_app_data)
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")],
+    ))
+}
+
+fn normalize_user_path(
+    current: Option<&str>,
+    preferred: &[PathBuf],
+    removed: &[PathBuf],
+) -> String {
+    let removed = removed
+        .iter()
+        .map(|entry| normalized_path_key(&entry.to_string_lossy()))
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    let entries = preferred
+        .iter()
+        .map(|entry| entry.to_string_lossy().into_owned())
+        .chain(
+            current
+                .into_iter()
+                .flat_map(|value| value.split(';').map(str::to_owned).collect::<Vec<_>>()),
+        );
+
+    for entry in entries {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let key = normalized_path_key(entry);
+        if removed.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        result.push(entry.to_owned());
+    }
+    result.join(";")
+}
+
+fn normalized_path_key(path: &str) -> String {
+    path.replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+fn preserve_user_path_backup(paths: &InstallPaths, user_path: Option<&str>) -> anyhow::Result<()> {
+    let backup_path = paths.root.join("user-path-backup.json");
+    if backup_path.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&paths.root).with_context(|| {
+        format!(
+            "failed to create install root for PATH backup {}",
+            paths.root.display()
+        )
+    })?;
+    let temporary = paths
+        .root
+        .join(format!(".user-path-backup-{}.tmp", std::process::id()));
+    let bytes = serde_json::to_vec_pretty(&UserPathBackup {
+        version: 1,
+        user_path,
+    })
+    .context("failed to serialize the user PATH backup")?;
+    std::fs::write(&temporary, bytes).with_context(|| {
+        format!(
+            "failed to write temporary user PATH backup {}",
+            temporary.display()
+        )
+    })?;
+    if let Err(error) = std::fs::rename(&temporary, &backup_path) {
+        let _ = std::fs::remove_file(&temporary);
+        if backup_path.exists() {
+            return Ok(());
+        }
+        return Err(error).with_context(|| {
+            format!(
+                "failed to publish user PATH backup {}",
+                backup_path.display()
+            )
+        });
+    }
+    Ok(())
 }
 
 fn read_bridge_backup(paths: &InstallPaths) -> anyhow::Result<AppBridgeBackup> {
@@ -411,14 +527,62 @@ mod tests {
     #[test]
     fn inventory_json_maps_app_package_environment_and_processes() {
         let inventory = parse_inventory(
-            r#"{"installLocation":"C:\\Program Files\\WindowsApps\\OpenAI.Codex_1","userCodexCliPath":"C:\\Users\\me\\.codex-monitor\\bin\\cdxm-codex-app-bridge.exe","userRealCodex":null,"processes":["explorer.exe","Codex.exe"]}"#,
+            r#"{"installLocation":"C:\\Program Files\\WindowsApps\\OpenAI.Codex_1","userCodexCliPath":"C:\\Users\\me\\.codex-monitor\\bin\\cdxm-codex-app-bridge.exe","userRealCodex":null,"userPath":"C:\\Tools","processes":["explorer.exe","Codex.exe"]}"#,
         )
         .unwrap();
         assert!(inventory
             .install_location
             .unwrap()
             .ends_with("OpenAI.Codex_1"));
+        assert_eq!(inventory.user_path.as_deref(), Some(r"C:\Tools"));
         assert_eq!(inventory.processes, ["explorer.exe", "Codex.exe"]);
+    }
+
+    #[test]
+    fn public_cli_path_is_ordered_and_desktop_is_removed() {
+        let preferred = [
+            PathBuf::from(r"C:\Users\me\.agents\bin"),
+            PathBuf::from(r"C:\Users\me\.codex-monitor\bin"),
+            PathBuf::from(r"C:\Users\me\AppData\Roaming\npm"),
+        ];
+        let removed = [PathBuf::from(r"C:\Users\me\AppData\Local\OpenAI\Codex\bin")];
+        let actual = normalize_user_path(
+            Some(
+                r"C:\Tools;C:\Users\me\AppData\Local\OpenAI\Codex\bin;C:\Users\me\AppData\Roaming\npm",
+            ),
+            &preferred,
+            &removed,
+        );
+
+        assert_eq!(
+            actual,
+            r"C:\Users\me\.agents\bin;C:\Users\me\.codex-monitor\bin;C:\Users\me\AppData\Roaming\npm;C:\Tools"
+        );
+        assert_eq!(
+            normalize_user_path(Some(&actual), &preferred, &removed),
+            actual
+        );
+    }
+
+    #[test]
+    fn user_path_backup_preserves_the_first_value() {
+        let root = TempDir::new().unwrap();
+        let paths = InstallPaths::new(root.path().join("install"));
+
+        preserve_user_path_backup(&paths, Some(r"C:\Original")).unwrap();
+        preserve_user_path_backup(&paths, Some(r"C:\AlreadyNormalized")).unwrap();
+
+        let backup: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(paths.root.join("user-path-backup.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(backup["version"], 1);
+        assert_eq!(backup["userPath"], r"C:\Original");
+        assert!(std::fs::read_dir(&paths.root).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")));
     }
 
     #[test]

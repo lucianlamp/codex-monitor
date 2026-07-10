@@ -30,10 +30,9 @@ is_codex_shim() {
 }
 
 # The Windows desktop install keeps a standalone Codex CLI under
-# %LOCALAPPDATA%/OpenAI/Codex/bin. That copy can lag behind a package-manager
-# CLI on PATH, so retain it only as a fallback instead of selecting it before
-# npm/Homebrew/etc. An explicit CODEX_MONITOR_REAL_CODEX still wins above all
-# automatic discovery.
+# %LOCALAPPDATA%/OpenAI/Codex/bin. That private copy can lag behind the
+# package-manager CLI and must not become the terminal runtime. An explicit
+# CODEX_MONITOR_REAL_CODEX still wins above all automatic discovery.
 is_desktop_codex_candidate() {
   local candidate="$1"
   local desktop_bin desktop_dir
@@ -56,11 +55,11 @@ resolve_real_codex() {
     return 0
   fi
 
-  local self_dir self_path shim_target old_ifs path_dir candidate candidate_dir candidate_path desktop_fallback
+  local self_dir self_path shim_target old_ifs path_dir candidate candidate_dir candidate_path desktop_seen
   self_dir="$(cd "$(dirname "$0")" && pwd)"
   self_path="$self_dir/$(basename "$0")"
   shim_target="${CODEX_MONITOR_SHIM_TARGET:-$self_path}"
-  desktop_fallback=""
+  desktop_seen=0
 
   old_ifs="$IFS"
   IFS=:
@@ -75,23 +74,22 @@ resolve_real_codex() {
       if [ "$candidate_path" != "$self_path" ] && [ "$candidate_path" != "$shim_target" ] \
         && ! is_codex_shim "$candidate_path"; then
         if is_desktop_codex_candidate "$candidate_path"; then
-          [ -n "$desktop_fallback" ] || desktop_fallback="$candidate_path"
-        else
-          printf '%s\n' "$candidate_path"
-          return 0
+          desktop_seen=1
+          continue
         fi
+        printf '%s\n' "$candidate_path"
+        return 0
       fi
     fi
     IFS=:
   done
   IFS="$old_ifs"
 
-  if [ -n "$desktop_fallback" ]; then
-    printf '%s\n' "$desktop_fallback"
-    return 0
+  if [ "$desktop_seen" -eq 1 ]; then
+    echo "codex-monitor shim: refusing Windows Desktop Codex fallback; install @openai/codex with npm or set CODEX_MONITOR_REAL_CODEX" >&2
+  else
+    echo "codex-monitor shim: real codex not found on PATH; install @openai/codex with npm or set CODEX_MONITOR_REAL_CODEX" >&2
   fi
-
-  echo "codex-monitor shim: real codex not found on PATH" >&2
   return 1
 }
 

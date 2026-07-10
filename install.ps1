@@ -24,6 +24,7 @@ $BinDir = Join-Path $InstallRoot 'bin'
 $ShimTarget = Join-Path $AgentsBin 'codex.cmd'
 $AppBridgeTarget = Join-Path $BinDir 'cdxm-codex-app-bridge.exe'
 $AppBridgeEnvBackup = Join-Path $InstallRoot 'app-bridge-env.json'
+$UserPathBackup = Join-Path $InstallRoot 'user-path-backup.json'
 $RuntimeDir = Join-Path $InstallRoot 'runtime'
 $ManagedRealCodex = Join-Path $RuntimeDir 'codex-app-real.exe'
 $ManagedCodeModeHost = Join-Path $RuntimeDir 'codex-code-mode-host.exe'
@@ -270,22 +271,50 @@ if "%CDXM_BASH%"=="" set "CDXM_BASH=C:\Program Files\Git\bin\bash.exe"
     Write-Host "  routes through Git Bash to $shimSource"
 }
 
-function Add-UserPathEntry {
-    param([string]$PathEntry)
+function Get-CdxmNormalizedPath {
+    param(
+        [AllowNull()][string]$Current,
+        [string[]]$Preferred,
+        [string[]]$Removed
+    )
 
-    $current = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $parts = @()
-    if ($current) {
-        $parts = $current -split ';' | Where-Object { $_ }
+    $result = [Collections.Generic.List[string]]::new()
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $removedSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $Removed) {
+        if (-not [string]::IsNullOrWhiteSpace($entry)) {
+            [void]$removedSet.Add($entry.Trim().TrimEnd('\', '/'))
+        }
     }
-    if ($parts | Where-Object { $_ -ieq $PathEntry }) {
-        Write-Host "PATH already contains $PathEntry"
-        return
+    foreach ($entry in @($Preferred) + @($Current -split ';')) {
+        if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+        $trimmed = $entry.Trim().TrimEnd('\', '/')
+        if ($removedSet.Contains($trimmed)) { continue }
+        if ($seen.Add($trimmed)) { $result.Add($entry.Trim()) }
     }
-    $newPath = if ($current) { "$PathEntry;$current" } else { $PathEntry }
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-    $env:Path = "$PathEntry;$env:Path"
-    Write-Host "Added $PathEntry to the user PATH"
+    return ($result -join ';')
+}
+
+function Repair-CdxmUserPath {
+    $currentUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (-not (Test-Path -LiteralPath $UserPathBackup)) {
+        New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+        $temporaryBackup = "$UserPathBackup.tmp-$PID"
+        $backup = [ordered]@{
+            version = 1
+            userPath = $currentUserPath
+        }
+        $backup | ConvertTo-Json | Set-Content -LiteralPath $temporaryBackup -Encoding utf8
+        Move-Item -LiteralPath $temporaryBackup -Destination $UserPathBackup
+    }
+
+    $preferred = @($AgentsBin, $BinDir, (Join-Path $env:APPDATA 'npm'))
+    $removed = @((Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin'))
+    $normalizedUserPath = Get-CdxmNormalizedPath -Current $currentUserPath -Preferred $preferred -Removed $removed
+    $normalizedProcessPath = Get-CdxmNormalizedPath -Current $env:Path -Preferred $preferred -Removed $removed
+    [Environment]::SetEnvironmentVariable('Path', $normalizedUserPath, 'User')
+    $env:Path = $normalizedProcessPath
+    Write-Host 'Normalized the user PATH for the codex-monitor shim and npm Codex CLI.'
 }
 
 function Test-CdxmOwnedAppBridge {
@@ -511,9 +540,8 @@ try {
     }
 
     if (-not $NoPath) {
-        if (Confirm-CdxmStep "Add $BinDir and $AgentsBin to the user PATH?" $true) {
-            Add-UserPathEntry $BinDir
-            Add-UserPathEntry $AgentsBin
+        if (Confirm-CdxmStep "Normalize the user PATH for $AgentsBin, $BinDir, and the npm Codex CLI?" $true) {
+            Repair-CdxmUserPath
         } else {
             Write-Host 'Skipped PATH update.'
         }

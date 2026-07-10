@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
 };
 use tempfile::TempDir;
 
@@ -46,7 +46,7 @@ fn write_fake_codex(path: &Path, label: &str) {
     assert!(status.success());
 }
 
-fn run_shim(path_entries: &[&Path], local_app_data: &Path) -> String {
+fn run_shim_output(path_entries: &[&Path], local_app_data: &Path) -> Output {
     let shim =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/codex-monitor/scripts/codex-shim.sh");
     let mut path = path_entries
@@ -54,14 +54,18 @@ fn run_shim(path_entries: &[&Path], local_app_data: &Path) -> String {
         .map(|entry| bash_path(entry))
         .collect::<Vec<_>>();
     path.extend(["/usr/bin".into(), "/bin".into()]);
-    let output = Command::new(bash_executable())
+    Command::new(bash_executable())
         .arg(bash_path(&shim))
         .arg("--version")
         .env("PATH", path.join(":"))
         .env("LOCALAPPDATA", bash_path(local_app_data))
         .env_remove("CODEX_MONITOR_REAL_CODEX")
         .output()
-        .unwrap();
+        .unwrap()
+}
+
+fn run_shim(path_entries: &[&Path], local_app_data: &Path) -> String {
+    let output = run_shim_output(path_entries, local_app_data);
     assert!(
         output.status.success(),
         "shim failed: {}",
@@ -86,14 +90,15 @@ fn shim_prefers_package_manager_codex_over_desktop_bundle() {
 }
 
 #[test]
-fn shim_uses_desktop_bundle_when_it_is_the_only_real_codex() {
+fn shim_rejects_desktop_bundle_as_the_only_real_codex() {
     let temp = TempDir::new().unwrap();
     let local_app_data = temp.path().join("LocalAppData");
     let desktop_dir = local_app_data.join("OpenAI/Codex/bin");
-    write_fake_codex(&desktop_dir.join("codex"), "desktop-fallback");
+    write_fake_codex(&desktop_dir.join("codex"), "desktop-old");
 
-    assert_eq!(
-        run_shim(&[&desktop_dir], &local_app_data),
-        "desktop-fallback"
+    let output = run_shim_output(&[&desktop_dir], &local_app_data);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("refusing Windows Desktop Codex fallback")
     );
 }

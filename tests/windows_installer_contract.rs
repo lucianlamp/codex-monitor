@@ -38,6 +38,18 @@ fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
 }
 
 #[test]
+fn windows_installer_isolates_the_public_cli_path() {
+    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
+
+    assert!(installer.contains("user-path-backup.json"));
+    assert!(installer.contains("function Get-CdxmNormalizedPath"));
+    assert!(installer.contains("function Repair-CdxmUserPath"));
+    assert!(installer.contains("OpenAI\\Codex\\bin"));
+    assert!(installer.contains("Join-Path $env:APPDATA 'npm'"));
+    assert!(installer.contains("Repair-CdxmUserPath"));
+}
+
+#[test]
 fn shared_shim_starts_app_server_and_runs_codex_with_remote() {
     let shim = shared_shim();
 

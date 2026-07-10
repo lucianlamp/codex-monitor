@@ -81,6 +81,11 @@ PATH with these properties:
 - `%LOCALAPPDATA%/OpenAI/Codex/bin` is removed from the user PATH;
 - unrelated PATH entries and their relative order are preserved.
 
+Before the first codex-monitor-owned PATH normalization, the original user PATH
+is written once to `~/.codex-monitor/user-path-backup.json`. Later installs and
+updates preserve that original backup instead of replacing it with an already
+normalized value.
+
 The App package may recreate its own directory or executable, but it will not
 be selected through the user PATH after the next install or update repair.
 
@@ -130,5 +135,6 @@ Live verification covers:
 ## Rollback
 
 Reinstalling the previous codex-monitor release restores its shim and updater.
-The installer must retain the existing user PATH backup behavior so PATH repair
-can be reversed without touching Microsoft Store package files.
+The original user PATH can be restored from
+`~/.codex-monitor/user-path-backup.json` without touching Microsoft Store
+package files.
