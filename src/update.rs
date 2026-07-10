@@ -7,6 +7,8 @@ use std::{
 
 mod apply;
 mod archive;
+#[cfg(any(target_os = "macos", test))]
+mod macos;
 mod model;
 #[cfg(windows)]
 mod windows;

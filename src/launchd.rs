@@ -361,7 +361,7 @@ fn bootstrap_agent(
     Ok(())
 }
 
-fn parse_program_arguments_from_plist(plist: &str) -> Vec<String> {
+pub(crate) fn parse_program_arguments_from_plist(plist: &str) -> Vec<String> {
     let mut saw_program_arguments = false;
     let mut in_array = false;
     let mut args = Vec::new();
@@ -391,7 +391,7 @@ fn parse_program_arguments_from_plist(plist: &str) -> Vec<String> {
     args
 }
 
-fn parse_launchctl_arguments(detail: &str) -> Vec<String> {
+pub(crate) fn parse_launchctl_arguments(detail: &str) -> Vec<String> {
     let mut in_arguments = false;
     let mut args = Vec::new();
     for line in detail.lines() {
@@ -468,7 +468,7 @@ fn push_key_string(plist: &mut String, key: &str, value: &str) {
     plist.push_str("</string>\n");
 }
 
-fn escape_xml(value: &str) -> String {
+pub(crate) fn escape_xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
