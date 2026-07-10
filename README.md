@@ -87,6 +87,24 @@ For a local source install without touching the Codex shim:
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -NoShim
 ```
 
+To make the Windows Codex App and `cdxm` share the exact same app-server,
+enable the reversible App bridge and restart Codex App:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -RealCodexPath "$HOME\AppData\Local\OpenAI\Codex\bin\codex.exe" -Source .
+```
+
+The installer preserves prior user-level `CODEX_CLI_PATH` and
+`CDXM_REAL_CODEX` values. To restore them:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -SkipBuild -RemoveAppBridge -Source .
+```
+
+On Windows, `--target app` accepts only a live `codex-app-bridge` marker. It
+does not treat an ordinary Codex CLI app-server process as Codex App. Verify
+after the restart with `cdxm targets` and `cdxm --target app loaded`.
+
 For development-only binary refresh:
 
 ```bash
@@ -248,10 +266,10 @@ On Unix, `--target app` connects to:
 $HOME/.codex/app-server-control/app-server-control.sock
 ```
 
-On Windows, `--target app` discovers the loopback WebSocket listener owned by
-the running Codex App app-server process. It fails with the candidate endpoints
-listed when more than one live Codex App endpoint is available; use
-`--endpoint` to select one explicitly in that case.
+On Windows, `--target app` discovers the loopback WebSocket listener published
+by the installed Codex App bridge. It refuses ordinary CLI app-server
+processes. If several live bridge endpoints exist, use `--endpoint` to select
+one explicitly.
 
 `--endpoint ws://127.0.0.1:<port>` connects to an explicit loopback WebSocket.
 `--endpoint unix:///path/to/app-server.sock` connects to an explicit Unix

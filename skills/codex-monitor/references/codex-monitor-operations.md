@@ -104,8 +104,9 @@ cdxm --target app remote connect
 - `--target auto` discovers environment endpoint variables, the Codex App
   control socket, live `codex --remote ...`, `codex app-server --listen ...`,
   and agmsg codex bridge processes.
-- `--target app` uses the Codex App control socket on Unix and the live Codex
-  App app-server loopback WebSocket listener on Windows.
+- `--target app` uses the Codex App control socket on Unix. On Windows it uses
+  only a live `codex-app-bridge` marker created by the reversible shared-server
+  integration; generic CLI app-server listeners are refused.
 - cwd-based commands probe `thread/loaded/list` plus `thread/list` to choose a
   live endpoint with a loaded thread for that cwd.
 - Explicit `--thread` commands probe `thread/loaded/list` and refuse unloaded

@@ -134,6 +134,18 @@ Use `-InstallShim` only when the user explicitly wants the Codex CLI shim:
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -InstallShim
 ```
 
+For the Windows Codex App itself, use the separate reversible shared-server
+bridge. This is required when delivery must reach the exact visible App thread:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -RealCodexPath "$HOME\AppData\Local\OpenAI\Codex\bin\codex.exe" -Source .
+```
+
+Restart Codex App, then require `cdxm targets` to show
+`codex-app-bridge` and `cdxm --target app loaded` to include the visible
+thread. An ordinary `codex-app-server-process` endpoint is not a valid App
+target. Roll back with `-SkipBuild -RemoveAppBridge` and another App restart.
+
 For daily Codex CLI monitor use, confirm the Codex entrypoint is shim-backed:
 
 ```bash

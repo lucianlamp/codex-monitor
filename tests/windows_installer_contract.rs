@@ -114,6 +114,32 @@ fn agmsg_apply_does_not_disable_project_wide_legacy_agmsg_monitor_delivery() {
 }
 
 #[test]
+fn windows_installer_manages_codex_app_bridge_reversibly() {
+    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
+
+    for required in [
+        "[switch]$InstallAppBridge",
+        "[switch]$RemoveAppBridge",
+        "[string]$RealCodexPath",
+        "cdxm-codex-app-bridge.exe",
+        "app-bridge-env.json",
+        "CODEX_CLI_PATH",
+        "CDXM_REAL_CODEX",
+        "function Enable-CdxmAppBridge",
+        "function Disable-CdxmAppBridge",
+    ] {
+        assert!(
+            installer.contains(required),
+            "installer is missing app bridge contract `{required}`"
+        );
+    }
+    assert!(installer.contains("InstallAppBridge.IsPresent -and $RemoveAppBridge.IsPresent"));
+    assert!(installer.contains("Test-CdxmOwnedAppBridge"));
+    assert!(installer.contains("Preserving the current user environment"));
+    assert!(installer.contains("Codex App must be restarted"));
+}
+
+#[test]
 fn readme_documents_windows_native_install() {
     let readme = fs::read_to_string(repo_root().join("README.md")).unwrap();
 
@@ -123,4 +149,7 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("MSVC Build Tools"));
     // The Windows shim now routes through Git Bash.
     assert!(readme.contains("Git Bash"));
+    assert!(readme.contains("-InstallAppBridge"));
+    assert!(readme.contains("-RemoveAppBridge"));
+    assert!(readme.contains("codex-app-bridge"));
 }

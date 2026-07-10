@@ -3,7 +3,10 @@ param(
     [switch]$Yes,
     [switch]$InstallShim,
     [switch]$NoShim,
+    [switch]$InstallAppBridge,
+    [switch]$RemoveAppBridge,
     [switch]$NoPath,
+    [string]$RealCodexPath,
     [string]$Source,
     [switch]$SkipBuild,
     [string]$RepoUrl = $(if ($env:CDXM_INSTALL_REPO_URL) { $env:CDXM_INSTALL_REPO_URL } else { 'https://github.com/lucianlamp/codex-monitor' }),
@@ -17,7 +20,13 @@ $ErrorActionPreference = 'Stop'
 
 $BinDir = Join-Path $InstallRoot 'bin'
 $ShimTarget = Join-Path $AgentsBin 'codex.cmd'
+$AppBridgeTarget = Join-Path $BinDir 'cdxm-codex-app-bridge.exe'
+$AppBridgeEnvBackup = Join-Path $InstallRoot 'app-bridge-env.json'
 $TempDir = $null
+
+if ($InstallAppBridge.IsPresent -and $RemoveAppBridge.IsPresent) {
+    throw '-InstallAppBridge and -RemoveAppBridge are mutually exclusive.'
+}
 
 function Confirm-CdxmStep {
     param(
@@ -84,6 +93,7 @@ function Install-CdxmBinaries {
         throw "cargo install failed with exit code $LASTEXITCODE"
     }
     Write-Host "Installed cdxm to $(Join-Path $BinDir 'cdxm.exe')"
+    Write-Host "Installed Codex App bridge to $AppBridgeTarget"
 }
 
 function Install-CdxmSkill {
@@ -200,6 +210,119 @@ function Add-UserPathEntry {
     Write-Host "Added $PathEntry to the user PATH"
 }
 
+function Test-CdxmOwnedAppBridge {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+    try {
+        return [IO.Path]::GetFullPath($Value) -ieq [IO.Path]::GetFullPath($AppBridgeTarget)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Resolve-RealCodexPath {
+    param([string]$ExplicitPath)
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        $candidates += $ExplicitPath
+    }
+    $saved = [Environment]::GetEnvironmentVariable('CDXM_REAL_CODEX', 'User')
+    if (-not [string]::IsNullOrWhiteSpace($saved)) {
+        $candidates += $saved
+    }
+    $candidates += (Join-Path $HOME 'AppData\Local\OpenAI\Codex\bin\codex.exe')
+
+    try {
+        $package = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction Stop |
+            Sort-Object Version -Descending |
+            Select-Object -First 1
+        if ($package.InstallLocation) {
+            $candidates += (Join-Path $package.InstallLocation 'app\resources\codex.exe')
+        }
+    }
+    catch {
+        # The per-user Codex path above remains the normal fallback.
+    }
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+        $resolved = (Resolve-Path -LiteralPath $candidate).Path
+        if ([IO.Path]::GetFullPath($resolved) -ieq [IO.Path]::GetFullPath($AppBridgeTarget)) {
+            continue
+        }
+        return $resolved
+    }
+    throw 'Could not find the real Codex executable. Pass -RealCodexPath <path-to-codex.exe>.'
+}
+
+function Set-ProcessEnvironmentValue {
+    param([string]$Name, [AllowNull()][string]$Value)
+
+    if ($null -eq $Value) {
+        Remove-Item -LiteralPath "Env:$Name" -ErrorAction SilentlyContinue
+    }
+    else {
+        Set-Item -LiteralPath "Env:$Name" -Value $Value
+    }
+}
+
+function Enable-CdxmAppBridge {
+    param([string]$ResolvedRealCodexPath)
+
+    if (-not (Test-Path -LiteralPath $AppBridgeTarget -PathType Leaf)) {
+        throw "Codex App bridge binary is missing: $AppBridgeTarget"
+    }
+    if (-not (Test-Path -LiteralPath $AppBridgeEnvBackup)) {
+        Write-Host 'Preserving the current user environment before enabling the Codex App bridge.'
+        $backup = [ordered]@{
+            version = 1
+            previousCodexCliPath = [Environment]::GetEnvironmentVariable('CODEX_CLI_PATH', 'User')
+            previousCdxmRealCodex = [Environment]::GetEnvironmentVariable('CDXM_REAL_CODEX', 'User')
+            bridgePath = $AppBridgeTarget
+        }
+        New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+        $backup | ConvertTo-Json | Set-Content -LiteralPath $AppBridgeEnvBackup -Encoding utf8
+    }
+
+    [Environment]::SetEnvironmentVariable('CODEX_CLI_PATH', $AppBridgeTarget, 'User')
+    [Environment]::SetEnvironmentVariable('CDXM_REAL_CODEX', $ResolvedRealCodexPath, 'User')
+    Set-ProcessEnvironmentValue 'CODEX_CLI_PATH' $AppBridgeTarget
+    Set-ProcessEnvironmentValue 'CDXM_REAL_CODEX' $ResolvedRealCodexPath
+    Write-Host "Enabled Codex App bridge: CODEX_CLI_PATH=$AppBridgeTarget"
+    Write-Host "Real Codex executable: $ResolvedRealCodexPath"
+    Write-Host 'Codex App must be restarted before the shared app-server is active.'
+}
+
+function Disable-CdxmAppBridge {
+    $current = [Environment]::GetEnvironmentVariable('CODEX_CLI_PATH', 'User')
+    if (-not (Test-CdxmOwnedAppBridge $current)) {
+        Write-Warning 'Preserving the current user environment because CODEX_CLI_PATH is not owned by codex-monitor.'
+        return
+    }
+
+    $previousCli = $null
+    $previousReal = $null
+    if (Test-Path -LiteralPath $AppBridgeEnvBackup) {
+        $backup = Get-Content -LiteralPath $AppBridgeEnvBackup -Raw | ConvertFrom-Json
+        $previousCli = $backup.previousCodexCliPath
+        $previousReal = $backup.previousCdxmRealCodex
+    }
+    [Environment]::SetEnvironmentVariable('CODEX_CLI_PATH', $previousCli, 'User')
+    [Environment]::SetEnvironmentVariable('CDXM_REAL_CODEX', $previousReal, 'User')
+    Set-ProcessEnvironmentValue 'CODEX_CLI_PATH' $previousCli
+    Set-ProcessEnvironmentValue 'CDXM_REAL_CODEX' $previousReal
+    Remove-Item -LiteralPath $AppBridgeEnvBackup -Force -ErrorAction SilentlyContinue
+    Write-Host 'Disabled Codex App bridge and restored the previous user environment.'
+    Write-Host 'Codex App must be restarted before the change takes effect.'
+}
+
 try {
     $SourceDir = Resolve-CdxmSource
     if (-not (Test-Path (Join-Path $SourceDir 'Cargo.toml'))) {
@@ -222,6 +345,13 @@ try {
         Install-CdxmSkill $SourceDir
     } else {
         Write-Host 'Skipped skill install.'
+    }
+
+    if ($InstallAppBridge) {
+        Enable-CdxmAppBridge (Resolve-RealCodexPath $RealCodexPath)
+    }
+    elseif ($RemoveAppBridge) {
+        Disable-CdxmAppBridge
     }
 
     $shouldInstallShim = $false
