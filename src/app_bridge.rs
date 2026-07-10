@@ -274,6 +274,7 @@ pub fn remove_marker(path: &Path) {
 pub fn read_marker_candidates(
     dir: &Path,
     live_endpoints: &BTreeSet<String>,
+    live_bridge_pids: &BTreeSet<u32>,
 ) -> Vec<EndpointCandidate> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -295,6 +296,7 @@ pub fn read_marker_candidates(
             continue;
         };
         if marker.version != APP_BRIDGE_MARKER_VERSION
+            || !live_bridge_pids.contains(&marker.bridge_pid)
             || !live_endpoints.contains(&marker.endpoint)
             || !is_safe_loopback_endpoint(&marker.endpoint)
         {
@@ -630,10 +632,13 @@ mod tests {
         };
         write_marker_atomic(dir.path(), &marker).unwrap();
 
-        assert!(read_marker_candidates(dir.path(), &BTreeSet::new()).is_empty());
+        let live_bridge_pids = BTreeSet::from([marker.bridge_pid]);
+        assert!(read_marker_candidates(dir.path(), &BTreeSet::new(), &live_bridge_pids).is_empty());
 
         let live = BTreeSet::from([marker.endpoint.clone()]);
-        let candidates = read_marker_candidates(dir.path(), &live);
+        assert!(read_marker_candidates(dir.path(), &live, &BTreeSet::new()).is_empty());
+
+        let candidates = read_marker_candidates(dir.path(), &live, &live_bridge_pids);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].source, "codex-app-bridge");
         assert_eq!(
@@ -670,6 +675,7 @@ mod tests {
             "ws://127.0.0.1:0".to_string(),
         ]);
 
-        assert!(read_marker_candidates(dir.path(), &live).is_empty());
+        let live_bridge_pids = BTreeSet::from([1, 2, 3]);
+        assert!(read_marker_candidates(dir.path(), &live, &live_bridge_pids).is_empty());
     }
 }

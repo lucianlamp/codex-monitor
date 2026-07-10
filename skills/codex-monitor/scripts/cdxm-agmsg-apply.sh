@@ -282,8 +282,21 @@ ensure_agmsg_monitor_delivery_mode() {
   fi
 }
 
+sha1_digest() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum | awk '{print $1}'
+  elif command -v sha1sum >/dev/null 2>&1; then
+    sha1sum | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha1 | awk '{print $NF}'
+  else
+    printf 'codex-monitor apply needs shasum, sha1sum, or openssl to hash the project path\n' >&2
+    return 127
+  fi
+}
+
 thread="$(resolve_thread)"
-project_hash="$(printf '%s' "$project" | shasum | awk '{print $1}')"
+project_hash="$(printf '%s' "$project" | sha1_digest)"
 marker_name=""
 if [ -n "$thread" ] && [ -f "$agmsg_run_dir/codex-name.$project_hash.$thread" ]; then
   marker_name="$(head -1 "$agmsg_run_dir/codex-name.$project_hash.$thread" 2>/dev/null || true)"

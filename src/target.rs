@@ -260,16 +260,21 @@ if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
         .output();
     match output {
         Ok(output) if output.status.success() => {
-            let mut candidates = discover_windows_endpoint_candidates_from_inventory_text(
-                &String::from_utf8_lossy(&output.stdout),
-            );
+            let inventory = String::from_utf8_lossy(&output.stdout);
+            let live_bridge_pids = live_windows_app_bridge_pids_from_inventory_text(&inventory);
+            let mut candidates =
+                discover_windows_endpoint_candidates_from_inventory_text(&inventory);
             let live_endpoints = candidates
                 .iter()
                 .map(|candidate| endpoint_label(&candidate.endpoint))
                 .collect::<BTreeSet<_>>();
             if let Ok(dir) = crate::app_bridge::marker_dir() {
                 let mut seen = live_endpoints.clone();
-                for marker in crate::app_bridge::read_marker_candidates(&dir, &live_endpoints) {
+                for marker in crate::app_bridge::read_marker_candidates(
+                    &dir,
+                    &live_endpoints,
+                    &live_bridge_pids,
+                ) {
                     push_candidate(&mut candidates, &mut seen, marker.endpoint, marker.source);
                 }
             }
@@ -364,6 +369,35 @@ fn discover_windows_endpoint_candidates_from_inventory_text(text: &str) -> Vec<E
         }
     }
     discover_windows_endpoint_candidates_from_process_and_tcp_text(&process_text, &tcp_text)
+}
+
+#[cfg(any(windows, test))]
+fn live_windows_app_bridge_pids_from_inventory_text(text: &str) -> BTreeSet<u32> {
+    let mut pids = BTreeSet::new();
+    let mut in_process_section = false;
+    for line in text.lines() {
+        match line.trim() {
+            "__CDXM_PROCESSES__" => {
+                in_process_section = true;
+                continue;
+            }
+            "__CDXM_TCP__" => break,
+            _ => {}
+        }
+        if !in_process_section {
+            continue;
+        }
+        let Some((pid, command_line)) = parse_windows_process_row(line) else {
+            continue;
+        };
+        if command_line
+            .to_ascii_lowercase()
+            .contains("cdxm-codex-app-bridge.exe")
+        {
+            pids.insert(pid);
+        }
+    }
+    pids
 }
 
 fn endpoints_from_process_line(line: &str) -> Vec<(String, Endpoint)> {
@@ -612,6 +646,22 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
         assert_eq!(
             parsed[1].endpoint,
             Endpoint::Explicit("ws://127.0.0.1:63030".to_string())
+        );
+    }
+
+    #[test]
+    fn discovers_only_live_windows_app_bridge_process_ids() {
+        let inventory = concat!(
+            "__CDXM_PROCESSES__\n",
+            "32868\tC:\\Users\\me\\.codex-monitor\\bin\\cdxm-codex-app-bridge.exe -c features.code_mode_host=true app-server\n",
+            "42000\t\"C:\\Users\\me\\.codex-monitor\\runtime\\codex-app-real.exe\" app-server --listen ws://127.0.0.1:55123\n",
+            "__CDXM_TCP__\n",
+            "42000\t127.0.0.1\t55123\n",
+        );
+
+        assert_eq!(
+            live_windows_app_bridge_pids_from_inventory_text(inventory),
+            BTreeSet::from([32868])
         );
     }
 

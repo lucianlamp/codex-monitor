@@ -86,6 +86,16 @@ fn agmsg_apply_uses_windows_background_watch_instead_of_launch_agent() {
 }
 
 #[test]
+fn agmsg_apply_can_hash_projects_without_macos_shasum() {
+    let helper = apply_helper();
+
+    assert!(helper.contains("command -v shasum"));
+    assert!(helper.contains("command -v sha1sum"));
+    assert!(helper.contains("openssl dgst -sha1"));
+    assert!(helper.contains("| sha1_digest"));
+}
+
+#[test]
 fn agmsg_apply_can_pin_the_codex_app_target() {
     let helper = apply_helper();
 
