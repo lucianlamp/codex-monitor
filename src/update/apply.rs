@@ -369,7 +369,7 @@ mod tests {
         manifest: UpdateManifest,
     }
 
-    fn fixture(absent_optional: Option<ManagedFile>) -> Fixture {
+    fn fixture() -> Fixture {
         let temp = TempDir::new().unwrap();
         let install_root = temp.path().join("install");
         let staging_root = install_root.join("staging");
@@ -379,13 +379,9 @@ mod tests {
             let destination = id.destination(&install_root);
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
             std::fs::write(&destination, format!("old-{id:?}")).unwrap();
-            let sha256 = if Some(id) == absent_optional {
-                None
-            } else {
-                let staged = staging_root.join(id.staged_name());
-                std::fs::write(&staged, format!("new-{id:?}")).unwrap();
-                Some(sha256_file(&staged).unwrap())
-            };
+            let staged = staging_root.join(id.staged_name());
+            std::fs::write(&staged, format!("new-{id:?}")).unwrap();
+            let sha256 = Some(sha256_file(&staged).unwrap());
             files.push(StagedFile { id, sha256 });
         }
         Fixture {
@@ -400,14 +396,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_installs_complete_manifest_and_removes_absent_optional_files() {
-        let fixture = fixture(Some(ManagedFile::CommandRunner));
+    fn apply_installs_complete_manifest() {
+        let fixture = fixture();
         let summary = apply_manifest(&fixture.manifest).unwrap();
-        assert_eq!(summary.changed, 6);
-        assert_eq!(summary.removed, 1);
-        assert!(!ManagedFile::CommandRunner
-            .destination(&fixture.manifest.install_root)
-            .exists());
+        assert_eq!(summary.changed, 2);
+        assert_eq!(summary.removed, 0);
         assert_eq!(
             std::fs::read(ManagedFile::CodexMonitor.destination(&fixture.manifest.install_root))
                 .unwrap(),
@@ -417,7 +410,7 @@ mod tests {
 
     #[test]
     fn apply_skips_identical_files_without_leaving_backups() {
-        let fixture = fixture(None);
+        let fixture = fixture();
         for file in &fixture.manifest.files {
             let staged = fixture.manifest.staging_root.join(file.id.staged_name());
             std::fs::copy(&staged, file.id.destination(&fixture.manifest.install_root)).unwrap();
@@ -436,9 +429,9 @@ mod tests {
 
     #[test]
     fn apply_failure_restores_every_destination() {
-        let fixture = fixture(None);
+        let fixture = fixture();
         let result = apply_manifest_with_hook(&fixture.manifest, |id| {
-            if id == ManagedFile::CodeModeHost {
+            if id == ManagedFile::Cdxm {
                 anyhow::bail!("injected replacement failure");
             }
             Ok(())

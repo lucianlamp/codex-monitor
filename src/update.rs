@@ -71,11 +71,7 @@ async fn run_update_windows() -> Result<i32> {
         "https://github.com/lucianlamp/codex-monitor/releases/latest/download".into()
     });
     println!("Downloading and verifying the latest codex-monitor release...");
-    let mut files = archive::download_latest_release(&release_base, &staging_root).await?;
-    files.extend(windows::stage_runtime(
-        &preflight.runtime_sources,
-        &staging_root,
-    )?);
+    let files = archive::download_latest_release(&release_base, &staging_root).await?;
 
     let manifest = UpdateManifest {
         version: MANIFEST_VERSION,

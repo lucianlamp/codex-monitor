@@ -16,35 +16,17 @@ pub const RESULT_VERSION: u32 = 1;
 pub enum ManagedFile {
     CodexMonitor,
     Cdxm,
-    AppBridge,
-    RealCodex,
-    CodeModeHost,
-    CommandRunner,
-    SandboxSetup,
 }
 
 impl ManagedFile {
-    pub const ALL: [Self; 7] = [
-        Self::AppBridge,
-        Self::RealCodex,
-        Self::CodeModeHost,
-        Self::CommandRunner,
-        Self::SandboxSetup,
-        Self::Cdxm,
-        Self::CodexMonitor,
-    ];
+    pub const ALL: [Self; 2] = [Self::CodexMonitor, Self::Cdxm];
 
-    pub const RELEASE: [Self; 3] = [Self::CodexMonitor, Self::Cdxm, Self::AppBridge];
+    pub const RELEASE: [Self; 2] = Self::ALL;
 
     pub fn destination(self, install_root: &Path) -> PathBuf {
         let (directory, name) = match self {
             Self::CodexMonitor => ("bin", "codex-monitor.exe"),
             Self::Cdxm => ("bin", "cdxm.exe"),
-            Self::AppBridge => ("bin", "cdxm-codex-app-bridge.exe"),
-            Self::RealCodex => ("runtime", "codex-app-real.exe"),
-            Self::CodeModeHost => ("runtime", "codex-code-mode-host.exe"),
-            Self::CommandRunner => ("runtime", "codex-command-runner.exe"),
-            Self::SandboxSetup => ("runtime", "codex-windows-sandbox-setup.exe"),
         };
         install_root.join(directory).join(name)
     }
@@ -53,26 +35,11 @@ impl ManagedFile {
         match self {
             Self::CodexMonitor => "codex-monitor.exe",
             Self::Cdxm => "cdxm.exe",
-            Self::AppBridge => "cdxm-codex-app-bridge.exe",
-            Self::RealCodex => "codex-app-real.exe",
-            Self::CodeModeHost => "codex-code-mode-host.exe",
-            Self::CommandRunner => "codex-command-runner.exe",
-            Self::SandboxSetup => "codex-windows-sandbox-setup.exe",
-        }
-    }
-
-    pub fn runtime_source_name(self) -> Option<&'static str> {
-        match self {
-            Self::RealCodex => Some("codex.exe"),
-            Self::CodeModeHost => Some("codex-code-mode-host.exe"),
-            Self::CommandRunner => Some("codex-command-runner.exe"),
-            Self::SandboxSetup => Some("codex-windows-sandbox-setup.exe"),
-            Self::CodexMonitor | Self::Cdxm | Self::AppBridge => None,
         }
     }
 
     pub fn is_required(self) -> bool {
-        !matches!(self, Self::CommandRunner | Self::SandboxSetup)
+        true
     }
 
     pub fn from_release_name(name: &str) -> Option<Self> {
@@ -148,10 +115,6 @@ impl InstallPaths {
             root,
         }
     }
-
-    pub fn destination(&self, file: ManagedFile) -> PathBuf {
-        file.destination(&self.root)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,18 +172,15 @@ mod tests {
             ManagedFile::CodexMonitor.destination(root),
             root.join("bin/codex-monitor.exe")
         );
-        assert_eq!(
-            ManagedFile::RealCodex.destination(root),
-            root.join("runtime/codex-app-real.exe")
-        );
+        assert_eq!(ManagedFile::Cdxm.destination(root), root.join("bin/cdxm.exe"));
     }
 
     #[test]
     fn required_and_optional_file_sets_are_fixed() {
         assert!(ManagedFile::CodexMonitor.is_required());
-        assert!(ManagedFile::CodeModeHost.is_required());
-        assert!(!ManagedFile::CommandRunner.is_required());
-        assert!(!ManagedFile::SandboxSetup.is_required());
+        assert!(ManagedFile::Cdxm.is_required());
+        assert_eq!(ManagedFile::ALL, [ManagedFile::CodexMonitor, ManagedFile::Cdxm]);
+        assert_eq!(ManagedFile::RELEASE, ManagedFile::ALL);
     }
 
     #[test]
@@ -252,7 +212,7 @@ mod tests {
         let files = manifest
             .files
             .iter()
-            .filter(|file| file.id != ManagedFile::AppBridge)
+            .filter(|file| file.id != ManagedFile::Cdxm)
             .cloned()
             .collect();
         assert!(UpdateManifest { files, ..manifest }

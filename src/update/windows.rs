@@ -1,4 +1,4 @@
-use super::model::{sha256_file, InstallPaths, ManagedFile, StagedFile};
+use super::model::InstallPaths;
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -51,61 +51,8 @@ struct UserPathBackup<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct RuntimeSources {
-    files: Vec<(ManagedFile, Option<PathBuf>)>,
-}
-
-impl RuntimeSources {
-    pub fn from_resources_dir(resources_dir: PathBuf) -> anyhow::Result<Self> {
-        let resources_dir = resources_dir.canonicalize().with_context(|| {
-            format!(
-                "failed to resolve Codex App resources directory {}",
-                resources_dir.display()
-            )
-        })?;
-        let mut files = Vec::new();
-        for id in [
-            ManagedFile::RealCodex,
-            ManagedFile::CodeModeHost,
-            ManagedFile::CommandRunner,
-            ManagedFile::SandboxSetup,
-        ] {
-            let name = id
-                .runtime_source_name()
-                .expect("runtime identifier must have a source name");
-            let candidate = resources_dir.join(name);
-            let source = if candidate.is_file() {
-                let source = candidate.canonicalize().with_context(|| {
-                    format!(
-                        "failed to resolve Codex App runtime {}",
-                        candidate.display()
-                    )
-                })?;
-                if !source.starts_with(&resources_dir) {
-                    bail!(
-                        "Codex App runtime escaped its package resources directory: {}",
-                        source.display()
-                    );
-                }
-                Some(source)
-            } else if id.is_required() {
-                bail!(
-                    "required Codex App runtime companion is missing: {}",
-                    candidate.display()
-                );
-            } else {
-                None
-            };
-            files.push((id, source));
-        }
-        Ok(Self { files })
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct WindowsPreflight {
     pub paths: InstallPaths,
-    pub runtime_sources: RuntimeSources,
 }
 
 pub fn preflight() -> anyhow::Result<WindowsPreflight> {
@@ -120,46 +67,11 @@ pub fn preflight() -> anyhow::Result<WindowsPreflight> {
     })?;
     verify_owned_bridge(&paths, &backup, user_bridge)?;
 
-    let install_location = inventory
-        .install_location
-        .context("OpenAI.Codex AppX package is not installed for this user")?;
-    let resources_dir = install_location.join("app").join("resources");
-    let runtime_sources = RuntimeSources::from_resources_dir(resources_dir)?;
-    Ok(WindowsPreflight {
-        paths,
-        runtime_sources,
-    })
+    Ok(WindowsPreflight { paths })
 }
 
 pub fn install_paths() -> anyhow::Result<InstallPaths> {
     Ok(InstallPaths::new(resolve_install_root()?))
-}
-
-pub fn stage_runtime(sources: &RuntimeSources, staging: &Path) -> anyhow::Result<Vec<StagedFile>> {
-    std::fs::create_dir_all(staging).with_context(|| {
-        format!(
-            "failed to create runtime staging directory {}",
-            staging.display()
-        )
-    })?;
-    let mut staged = Vec::new();
-    for (id, source) in &sources.files {
-        let sha256 = if let Some(source) = source {
-            let destination = staging.join(id.staged_name());
-            std::fs::copy(source, &destination).with_context(|| {
-                format!(
-                    "failed to stage Codex App runtime {} to {}",
-                    source.display(),
-                    destination.display()
-                )
-            })?;
-            Some(sha256_file(&destination)?)
-        } else {
-            None
-        };
-        staged.push(StagedFile { id: *id, sha256 });
-    }
-    Ok(staged)
 }
 
 pub fn ensure_app_not_running() -> anyhow::Result<()> {
@@ -192,14 +104,14 @@ if ($parent) { $parent.WaitForExit() }
 pub fn reassert_owned_environment(paths: &InstallPaths) -> anyhow::Result<()> {
     let inventory = query_inventory()?;
     let backup = read_bridge_backup(paths)?;
-    let expected_bridge = paths.destination(ManagedFile::AppBridge);
+    let expected_bridge = paths.root.join("bin").join("cdxm-codex-app-bridge.exe");
     let user_bridge = inventory
         .user_codex_cli_path
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("CODEX_CLI_PATH is no longer owned by codex-monitor"))?;
     verify_owned_bridge(paths, &backup, user_bridge)?;
 
-    let real_codex = paths.destination(ManagedFile::RealCodex);
+    let real_codex = paths.root.join("runtime").join("codex-app-real.exe");
     let (preferred_path_entries, removed_path_entries) = public_cli_path_entries(paths)?;
     preserve_user_path_backup(paths, inventory.user_path.as_deref())?;
     let user_path = normalize_user_path(
@@ -445,7 +357,7 @@ fn verify_owned_bridge(
     backup: &AppBridgeBackup,
     user_bridge: &Path,
 ) -> anyhow::Result<()> {
-    let expected = paths.destination(ManagedFile::AppBridge);
+    let expected = paths.root.join("bin").join("cdxm-codex-app-bridge.exe");
     if backup.version != 1
         || !paths_equal(&backup.bridge_path, &expected)
         || !paths_equal(user_bridge, &expected)
@@ -499,7 +411,7 @@ fn require_powershell_success(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::update::model::{InstallPaths, ManagedFile};
+    use crate::update::model::InstallPaths;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
@@ -517,9 +429,9 @@ mod tests {
         let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
         let backup = AppBridgeBackup {
             version: 1,
-            bridge_path: paths.destination(ManagedFile::AppBridge),
+            bridge_path: paths.root.join("bin").join("cdxm-codex-app-bridge.exe"),
         };
-        let expected = paths.destination(ManagedFile::AppBridge);
+        let expected = paths.root.join("bin").join("cdxm-codex-app-bridge.exe");
         assert!(verify_owned_bridge(&paths, &backup, &expected).is_ok());
         assert!(verify_owned_bridge(&paths, &backup, Path::new(r"C:\other.exe")).is_err());
     }
@@ -585,20 +497,4 @@ mod tests {
             .ends_with(".tmp")));
     }
 
-    #[test]
-    fn runtime_staging_records_absent_optional_companions() {
-        let source = TempDir::new().unwrap();
-        let staging = TempDir::new().unwrap();
-        std::fs::write(source.path().join("codex.exe"), b"codex").unwrap();
-        std::fs::write(source.path().join("codex-code-mode-host.exe"), b"host").unwrap();
-        let sources = RuntimeSources::from_resources_dir(source.path().to_path_buf()).unwrap();
-        let staged = stage_runtime(&sources, staging.path()).unwrap();
-        assert_eq!(staged.len(), 4);
-        assert!(staged
-            .iter()
-            .any(|file| file.id == ManagedFile::RealCodex && file.sha256.is_some()));
-        assert!(staged
-            .iter()
-            .any(|file| file.id == ManagedFile::CommandRunner && file.sha256.is_none()));
-    }
 }
