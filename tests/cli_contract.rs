@@ -43,6 +43,16 @@ fn unix_installer_uses_single_native_binary_and_cdxm_launcher() {
 }
 
 #[test]
+fn docs_define_macos_update_and_single_binary_migration() {
+    let readme =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
+    assert!(readme.contains("macOS arm64 and Intel"));
+    assert!(readme.contains("one native executable"));
+    assert!(readme.contains("reloads each exact LaunchAgent"));
+    assert!(readme.contains("Linux self-update is not supported"));
+}
+
+#[test]
 fn update_command_is_public_and_apply_worker_is_hidden() {
     let primary = env!("CARGO_BIN_EXE_codex-monitor");
     let help = Command::new(primary).arg("--help").output().unwrap();

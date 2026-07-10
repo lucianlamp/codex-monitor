@@ -42,6 +42,7 @@ fn release_workflow_packages_fixed_asset_names_with_checksums() {
 #[test]
 fn release_packages_one_native_binary() {
     let wf = workflow();
+    assert!(wf.contains("tar -czf \"$name.tar.gz\" -C \"$staging\" codex-monitor"));
     assert!(wf.contains("release/codex-monitor.exe"));
     assert!(!wf.contains("release/cdxm.exe"));
     assert!(!wf.contains("release/cdxm-codex-app-bridge.exe"));

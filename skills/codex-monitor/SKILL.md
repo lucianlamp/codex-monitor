@@ -191,14 +191,23 @@ For Windows Codex App, keep `CODEX_CLI_PATH` unset or pointed directly at the
 OpenAI-signed native App-managed `codex.exe`. Never point it at a codex-monitor
 launcher. Use the Codex App shortcuts above for agmsg delivery.
 
-Run the updater from any directory:
+Run the updater from any directory on Windows or macOS:
 
 ```powershell
 codex-monitor update
 ```
 
-This updates the single native `codex-monitor.exe` from a checksum-verified
-Windows release, refreshes the `cdxm.cmd` compatibility launcher, preserves an
+On macOS arm64 and Intel, this downloads the matching checksum-verified tar.gz,
+atomically updates the one native executable at
+`~/.codex-monitor/bin/codex-monitor`, regenerates the POSIX `cdxm` launcher,
+migrates owned `com.local.codex-monitor.agmsg.*` plists, and reloads each exact
+LaunchAgent that was already loaded. It restores changed plists if any reload
+or active-argument verification fails, and removes fixed legacy native copies
+under `~/.cargo/bin` only after the whole migration succeeds. Linux self-update
+is not supported; use `install.sh` there.
+
+On Windows, this updates the single native `codex-monitor.exe` from a
+checksum-verified release, refreshes the `cdxm.cmd` compatibility launcher, preserves an
 unowned or explicitly native `CODEX_CLI_PATH`, and
 migrates a proven-owned legacy bridge back to its saved environment. A native
 App does not need to be closed. When `CODEX_CLI_PATH` is already native or

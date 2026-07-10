@@ -328,6 +328,15 @@ fn unix_installer_finalizes_real_macos_installs() {
 }
 
 #[test]
+fn docs_define_macos_update_and_single_binary_migration() {
+    let readme = fs::read_to_string(repo_root().join("README.md")).unwrap();
+    assert!(readme.contains("macOS arm64 and Intel"));
+    assert!(readme.contains("one native executable"));
+    assert!(readme.contains("reloads each exact LaunchAgent"));
+    assert!(readme.contains("Linux self-update is not supported"));
+}
+
+#[test]
 fn installer_skip_build_does_not_run_the_macos_finalizer() {
     // --skip-build writes the compatibility launcher for its contract tests,
     // but must not download/build a native binary or run the macOS finalizer.

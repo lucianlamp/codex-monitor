@@ -40,6 +40,20 @@ turn. Heartbeat mode upserts one current-thread Codex automation. Off cancels
 the foreground wait and deletes only that task's matching heartbeat. All three
 use agmsg scripts and leave watcher/process lifecycle untouched.
 
+Native updater:
+
+```bash
+codex-monitor update
+```
+
+On macOS arm64 and Intel, the updater verifies the matching release tarball,
+atomically installs `~/.codex-monitor/bin/codex-monitor`, writes `cdxm` as a
+POSIX launcher, then migrates and immediately reloads only exact owned
+`com.local.codex-monitor.agmsg.*` labels. If a reload fails, it restores the
+original plists and loaded arguments and leaves legacy Cargo binaries in place.
+Linux self-update is not supported. Windows retains its detached helper and
+locked-file migration behavior.
+
 Explicit apply prefers codex-monitor over the legacy agmsg `codex-bridge` for
 the same `team/name`: if `doctor` reports `kind=codex-bridge` as the target
 consumer, the helper runs dry-run first, then stops only that same legacy bridge

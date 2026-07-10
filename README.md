@@ -20,7 +20,7 @@ One-liner install:
 curl -fsSL https://raw.githubusercontent.com/lucianlamp/codex-monitor/main/install.sh | bash
 ```
 
-On **macOS arm64** and **macOS x86_64**, the installer downloads a prebuilt
+On **macOS arm64 and Intel**, the installer downloads the matching prebuilt
 binary from GitHub Releases and verifies its SHA256 checksum — no Rust or
 Cargo toolchain is needed. On other platforms (e.g. Linux), or when
 `--build-from-source` is passed, it falls back to a source build, which
@@ -119,18 +119,28 @@ inside one blocking tool call. Empty polls stay local and do not start model
 turns. Heartbeat mode is opt-in for delivery after the current turn completes.
 Neither mode starts a watcher or changes the App executable.
 
-Run updates from any directory:
+Run updates from any directory on Windows or macOS:
 
-```powershell
+```bash
 codex-monitor update
 ```
 
-The command verifies the latest release checksum and updates the single native
-`codex-monitor.exe`. It refreshes `cdxm.cmd`, preserves an explicit native or
-otherwise unowned `CODEX_CLI_PATH`, and restores a proven-owned legacy bridge
-to its saved environment. A running legacy `cdxm.exe` remains untouched until
-a later update after its consumer exits. The updater never stops App, a watcher,
-or a CLI process.
+On macOS arm64 and Intel, the command downloads the matching tar.gz release,
+requires its SHA-256 checksum, and atomically updates one native executable at
+`$HOME/.codex-monitor/bin/codex-monitor`. It regenerates `cdxm` as a POSIX
+launcher, migrates owned `com.local.codex-monitor.agmsg.*` plists, and reloads each exact LaunchAgent
+that was already loaded. A reload failure restores the
+original plists and loaded arguments before returning an error. Fixed legacy
+native copies under `$HOME/.cargo/bin` are removed only after all selected
+agents verify the canonical launcher. Linux self-update is not supported; use
+`install.sh` there.
+
+On Windows, the command verifies the latest release checksum and updates the
+single native `codex-monitor.exe`. It refreshes `cdxm.cmd`, preserves an
+explicit native or otherwise unowned `CODEX_CLI_PATH`, and restores a
+proven-owned legacy bridge to its saved environment. A running legacy
+`cdxm.exe` remains untouched until a later update after its consumer exits. The
+Windows updater never stops App, a watcher, or a CLI process.
 
 On Windows, `--target app` is intentionally unavailable because native App has
 no safe external injection endpoint. Use the three skill shortcuts for App
@@ -567,6 +577,11 @@ another bridge delivering the same inbox.
 `launch-agent status` includes stdout/stderr log paths, mtimes, desired thread,
 active thread, and `args_match`. This makes stale launchd ProgramArguments
 visible instead of hiding them behind `installed=true loaded=true`.
+
+`codex-monitor update` and a real Darwin `install.sh` binary install converge
+existing owned LaunchAgents on `$HOME/.codex-monitor/bin/cdxm`. Migration
+preserves cwd, team/name, thread pin, endpoint, mode, DB, logs, and all arguments
+after the executable path; it reloads only the exact matching labels.
 
 ## Safety
 
