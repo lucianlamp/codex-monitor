@@ -76,6 +76,7 @@ fn docs_define_native_app_monitor_shortcuts() {
         "only the installed agmsg scripts",
         "Never start, stop, kill, restart, replace, or install any watcher or process.",
         "refusing Windows Desktop Codex fallback",
+        "active orphaned legacy runtime files",
     ] {
         assert!(skill.contains(required), "missing `{required}`");
     }
@@ -211,6 +212,9 @@ fn windows_installer_migrates_legacy_bridge_without_managing_processes() {
     assert!(installer.contains("previousCdxmRealCodex"));
     assert!(installer.contains("Get-CimInstance Win32_Process"));
     assert!(installer.contains("ExecutablePath"));
+    assert!(installer.contains("if ($owned -and $active.Count -gt 0)"));
+    assert!(installer.contains("$runtimeActive"));
+    assert!(installer.contains("Deferring cleanup of active legacy runtime"));
     assert!(!installer.contains("Stop-Process"));
 }
 

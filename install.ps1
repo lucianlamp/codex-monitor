@@ -343,13 +343,18 @@ function Migrate-CdxmLegacyAppBridge {
             $_.ExecutablePath -and
             $normalizedLegacyPaths -icontains [IO.Path]::GetFullPath($_.ExecutablePath)
         })
-    if ($active.Count -gt 0) {
-        $details = ($active | ForEach-Object { "PID $($_.ProcessId) ($($_.ExecutablePath))" }) -join ', '
-        throw "Fully quit Codex App before migrating the legacy bridge (active: $details)"
-    }
-
     $currentCli = [Environment]::GetEnvironmentVariable('CODEX_CLI_PATH', 'User')
     $owned = Test-CdxmPathEqual $currentCli $AppBridgeTarget
+    $activePaths = @($active | ForEach-Object { [IO.Path]::GetFullPath($_.ExecutablePath) })
+    $runtimePrefix = [IO.Path]::GetFullPath($RuntimeDir).TrimEnd('\') + '\'
+    $runtimeActive = @($activePaths | Where-Object {
+        $_.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase)
+    }).Count -gt 0
+    if ($owned -and $active.Count -gt 0) {
+        $details = ($active | ForEach-Object { "PID $($_.ProcessId) ($($_.ExecutablePath))" }) -join ', '
+        throw "Fully quit Codex App before migrating the owned legacy bridge (active: $details)"
+    }
+
     if ($owned) {
         if (-not (Test-Path -LiteralPath $AppBridgeEnvBackup -PathType Leaf)) {
             throw "CODEX_CLI_PATH is the legacy bridge but its ownership file is missing: $AppBridgeEnvBackup"
@@ -371,7 +376,17 @@ function Migrate-CdxmLegacyAppBridge {
         Write-Warning 'Preserving CODEX_CLI_PATH because it is not owned by this codex-monitor installation.'
     }
 
+    if ($active.Count -gt 0) {
+        $details = ($active | ForEach-Object { "PID $($_.ProcessId) ($($_.ExecutablePath))" }) -join ', '
+        Write-Warning "Deferring cleanup of active legacy runtime: $details"
+    }
+
     foreach ($legacyPath in $legacyPaths) {
+        $legacyFullPath = [IO.Path]::GetFullPath($legacyPath)
+        $isRuntimePath = $legacyFullPath.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase)
+        if (($activePaths -icontains $legacyFullPath) -or ($runtimeActive -and $isRuntimePath)) {
+            continue
+        }
         if (Test-Path -LiteralPath $legacyPath -PathType Leaf) {
             Remove-Item -LiteralPath $legacyPath -Force
         }

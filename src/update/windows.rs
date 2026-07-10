@@ -86,9 +86,9 @@ pub struct WindowsPreflight {
 pub fn preflight() -> anyhow::Result<WindowsPreflight> {
     let paths = install_paths()?;
     let inventory = query_inventory()?;
-    ensure_legacy_files_not_running_in(&paths, &inventory)?;
     let backup = read_owned_bridge_backup(&paths, &inventory)?;
-    let _ = plan_legacy_environment(&paths, &inventory, backup.as_ref())?;
+    let action = plan_legacy_environment(&paths, &inventory, backup.as_ref())?;
+    ensure_owned_migration_not_running(&paths, &inventory, &action)?;
     Ok(WindowsPreflight { paths })
 }
 
@@ -99,7 +99,9 @@ pub fn install_paths() -> anyhow::Result<InstallPaths> {
 pub fn ensure_legacy_bridge_not_running() -> anyhow::Result<()> {
     let paths = install_paths()?;
     let inventory = query_inventory()?;
-    ensure_legacy_files_not_running_in(&paths, &inventory)
+    let backup = read_owned_bridge_backup(&paths, &inventory)?;
+    let action = plan_legacy_environment(&paths, &inventory, backup.as_ref())?;
+    ensure_owned_migration_not_running(&paths, &inventory, &action)
 }
 
 pub fn wait_for_process_exit(pid: u32) -> anyhow::Result<()> {
@@ -127,10 +129,10 @@ if ($parent) { $parent.WaitForExit() }
 
 pub fn finalize_environment(paths: &InstallPaths) -> anyhow::Result<()> {
     let inventory = query_inventory()?;
-    ensure_legacy_files_not_running_in(paths, &inventory)?;
     let had_backup = paths.app_bridge_backup.is_file();
     let backup = read_owned_bridge_backup(paths, &inventory)?;
     let action = plan_legacy_environment(paths, &inventory, backup.as_ref())?;
+    ensure_owned_migration_not_running(paths, &inventory, &action)?;
 
     let (preferred_path_entries, removed_path_entries) = public_cli_path_entries(paths)?;
     preserve_user_path_backup(paths, inventory.user_path.as_deref())?;
@@ -140,7 +142,7 @@ pub fn finalize_environment(paths: &InstallPaths) -> anyhow::Result<()> {
         &removed_path_entries,
     );
     apply_environment(&action, &user_path)?;
-    cleanup_legacy_files(paths)?;
+    cleanup_legacy_files(paths, &inventory)?;
 
     if matches!(action, LegacyEnvironmentAction::Restore { .. }) {
         std::fs::remove_file(&paths.app_bridge_backup).with_context(|| {
@@ -246,18 +248,31 @@ fn plan_legacy_environment(
     })
 }
 
-fn ensure_legacy_files_not_running_in(
+fn active_legacy_processes<'a>(
     paths: &InstallPaths,
-    inventory: &WindowsInventory,
-) -> anyhow::Result<()> {
+    inventory: &'a WindowsInventory,
+) -> Vec<&'a LegacyProcess> {
     let legacy = legacy_paths(paths)
         .into_iter()
         .map(|path| normalized_path_key(&path.to_string_lossy()))
         .collect::<HashSet<_>>();
-    let active = inventory
+    inventory
         .processes
         .iter()
         .filter(|process| legacy.contains(&normalized_path_key(&process.path.to_string_lossy())))
+        .collect()
+}
+
+fn ensure_owned_migration_not_running(
+    paths: &InstallPaths,
+    inventory: &WindowsInventory,
+    action: &LegacyEnvironmentAction,
+) -> anyhow::Result<()> {
+    if matches!(action, LegacyEnvironmentAction::Preserve) {
+        return Ok(());
+    }
+    let active = active_legacy_processes(paths, inventory)
+        .into_iter()
         .map(|process| format!("PID {} ({})", process.pid, process.path.display()))
         .collect::<Vec<_>>();
     if !active.is_empty() {
@@ -338,8 +353,29 @@ fn apply_environment(action: &LegacyEnvironmentAction, user_path: &str) -> anyho
     Ok(())
 }
 
-fn cleanup_legacy_files(paths: &InstallPaths) -> anyhow::Result<()> {
+fn cleanup_legacy_files(paths: &InstallPaths, inventory: &WindowsInventory) -> anyhow::Result<()> {
+    let active = active_legacy_processes(paths, inventory);
+    let mut deferred_paths = active
+        .iter()
+        .map(|process| normalized_path_key(&process.path.to_string_lossy()))
+        .collect::<HashSet<_>>();
+    let runtime_key = normalized_path_key(&legacy_runtime_dir(paths).to_string_lossy());
+    let runtime_is_active = active.iter().any(|process| {
+        let process_key = normalized_path_key(&process.path.to_string_lossy());
+        process_key.starts_with(&format!("{runtime_key}\\"))
+    });
+    if runtime_is_active {
+        deferred_paths.extend(
+            legacy_paths(paths)
+                .into_iter()
+                .filter(|path| path.starts_with(legacy_runtime_dir(paths)))
+                .map(|path| normalized_path_key(&path.to_string_lossy())),
+        );
+    }
     for path in legacy_paths(paths) {
+        if deferred_paths.contains(&normalized_path_key(&path.to_string_lossy())) {
+            continue;
+        }
         if path.is_file() {
             std::fs::remove_file(&path).with_context(|| {
                 format!(
@@ -357,6 +393,16 @@ fn cleanup_legacy_files(paths: &InstallPaths) -> anyhow::Result<()> {
                 runtime.display()
             )
         })?;
+    }
+    if !active.is_empty() {
+        let details = active
+            .iter()
+            .map(|process| format!("PID {} ({})", process.pid, process.path.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "codex-monitor update deferred cleanup of active legacy runtime files: {details}"
+        );
     }
     Ok(())
 }
@@ -610,16 +656,37 @@ mod tests {
     }
 
     #[test]
-    fn exact_active_legacy_path_blocks_migration() {
+    fn exact_active_legacy_path_blocks_owned_migration() {
         let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
-        let mut inventory = fixture_inventory(None);
+        let mut inventory = fixture_inventory(Some(legacy_bridge_path(&paths)));
         inventory.processes.push(LegacyProcess {
             pid: 42,
             path: legacy_bridge_path(&paths),
         });
-        let error = ensure_legacy_files_not_running_in(&paths, &inventory).unwrap_err();
+        let action = LegacyEnvironmentAction::Restore {
+            codex_cli_path: Some(PathBuf::from(r"C:\Native\codex.exe")),
+            cdxm_real_codex: None,
+        };
+        let error = ensure_owned_migration_not_running(&paths, &inventory, &action).unwrap_err();
         assert!(error.to_string().contains("PID 42"));
         assert!(error.to_string().contains("fully quit Codex App"));
+    }
+
+    #[test]
+    fn active_legacy_path_is_deferred_for_native_environment() {
+        let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
+        let mut inventory = fixture_inventory(Some(PathBuf::from(r"C:\Native\codex.exe")));
+        inventory.processes.push(LegacyProcess {
+            pid: 42,
+            path: legacy_bridge_path(&paths),
+        });
+
+        assert!(ensure_owned_migration_not_running(
+            &paths,
+            &inventory,
+            &LegacyEnvironmentAction::Preserve,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -632,9 +699,30 @@ mod tests {
         }
         let keep = paths.root.join("runtime").join("keep.txt");
         std::fs::write(&keep, b"keep").unwrap();
-        cleanup_legacy_files(&paths).unwrap();
+        cleanup_legacy_files(&paths, &fixture_inventory(None)).unwrap();
         assert!(legacy_paths(&paths).iter().all(|path| !path.exists()));
         assert!(keep.is_file());
+    }
+
+    #[test]
+    fn cleanup_defers_only_active_legacy_files() {
+        let temp = TempDir::new().unwrap();
+        let paths = InstallPaths::new(temp.path().join("install"));
+        let legacy = legacy_paths(&paths);
+        for path in &legacy {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"legacy").unwrap();
+        }
+        let mut inventory = fixture_inventory(Some(PathBuf::from(r"C:\Native\codex.exe")));
+        inventory.processes.push(LegacyProcess {
+            pid: 42,
+            path: legacy[1].clone(),
+        });
+
+        cleanup_legacy_files(&paths, &inventory).unwrap();
+
+        assert!(!legacy[0].exists());
+        assert!(legacy[1..].iter().all(|path| path.exists()));
     }
 
     #[test]

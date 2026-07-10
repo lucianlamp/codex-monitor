@@ -148,7 +148,10 @@ instruction to quit Codex App; it never terminates the process.
 The bridge and copied runtime locations under the codex-monitor install root
 are fixed obsolete managed paths. They are removed when their exact paths are
 not in use, even when the current environment already points to native Codex.
-This file cleanup does not authorize any environment change.
+When the environment is already native or otherwise unowned, active orphaned
+legacy runtime files do not block installation of the public binaries: their
+cleanup is deferred until a later update. This file cleanup does not authorize
+any environment change or process termination.
 
 If ownership cannot be proven, environment values are preserved and the
 operation reports an actionable warning instead of guessing. A native explicit
