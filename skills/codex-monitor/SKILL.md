@@ -146,6 +146,20 @@ The installer must stage both the App-bundled Codex executable and its matching
 in `~/.codex-monitor/runtime`. If `-RealCodexPath` is supplied explicitly, its
 directory must contain the matching code-mode host.
 
+After Codex App or codex-monitor is updated, fully quit Codex App and run from
+any directory:
+
+```powershell
+codex-monitor update
+```
+
+This updates all three codex-monitor executables from a checksum-verified
+Windows release and refreshes the matching private App runtime in one
+rollback-safe transaction. It refuses to run while the App bridge/runtime is
+active, preserves the owned `CODEX_CLI_PATH` / `CDXM_REAL_CODEX` configuration,
+and does not manage watcher lifecycle. Reopen Codex App only after the helper
+prints the completion message.
+
 Restart Codex App, then require `cdxm targets` to show
 `codex-app-bridge` and `cdxm --target app loaded` to include the visible
 thread. An ordinary `codex-app-server-process` endpoint is not a valid App
@@ -171,6 +185,11 @@ macOS/Linux or `%USERPROFILE%\.agents\bin\codex.cmd` on Windows. That shim may
 be agmsg's shim; the important property is that interactive CLI launches become
 app-server-bound so `cdxm targets` can discover the live endpoint without the
 user manually typing `--remote`.
+
+When `CODEX_MONITOR_REAL_CODEX` is not set, automatic shim discovery treats the
+Windows Desktop-bundled `%LOCALAPPDATA%\OpenAI\Codex\bin\codex` as a final
+fallback. A package-manager Codex elsewhere on PATH is preferred so an older
+Desktop copy cannot silently downgrade CLI sessions.
 
 Windows builds support the `cdxm` CLI, WebSocket/stdio transports, Codex CLI
 shim, and the agmsg SQLite adapter. Use native PowerShell for installation and

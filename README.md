@@ -115,7 +115,21 @@ before older per-user CLI copies. It copies the App-bundled Codex executable to
 because WindowsApps package executables cannot be launched directly by the
 external bridge and Codex resolves those helpers as sibling files. An explicit
 `-RealCodexPath` must point to a directory containing
-`codex-code-mode-host.exe`. Rerun the bridge install after a Codex App update.
+`codex-code-mode-host.exe`.
+
+After a Codex App update, fully quit Codex App and run this from any directory:
+
+```powershell
+codex-monitor update
+```
+
+The command verifies the latest codex-monitor release checksum, updates
+`codex-monitor.exe`, `cdxm.exe`, and `cdxm-codex-app-bridge.exe`, then refreshes
+the private App-bundled Codex runtime and its matching helpers as one
+rollback-safe transaction. It refuses to mutate files while Codex App or the
+shared bridge is active. Reopen Codex App after the completion message. The
+command does not start, stop, or replace monitor watchers.
+
 To restore the prior environment:
 
 ```powershell

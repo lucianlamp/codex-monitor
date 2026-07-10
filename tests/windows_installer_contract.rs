@@ -186,4 +186,6 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("-RemoveAppBridge"));
     assert!(readme.contains("codex-app-bridge"));
     assert!(readme.contains("codex-code-mode-host.exe"));
+    assert!(readme.contains("codex-monitor update"));
+    assert!(readme.contains("fully quit Codex App"));
 }
