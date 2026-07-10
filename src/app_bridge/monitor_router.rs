@@ -166,6 +166,12 @@ impl MonitorRouter {
         self.pending
             .retain(|_, pending| pending.connection_id != connection_id);
     }
+
+    pub(super) fn cancel_forward(&mut self, message: &Value) {
+        if let Some(internal_id) = message.get("id").and_then(Value::as_str) {
+            self.pending.remove(internal_id);
+        }
+    }
 }
 
 fn numeric_request_id(message: &Value) -> Option<Value> {
