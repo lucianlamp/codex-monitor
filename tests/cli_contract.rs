@@ -2,8 +2,8 @@ use std::{fs, path::Path, process::Command};
 
 #[test]
 fn package_exposes_only_public_binaries() {
-    let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
-        .unwrap();
+    let manifest =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
     assert!(manifest.contains("name = \"codex-monitor\""));
     assert!(manifest.contains("name = \"cdxm\""));
     assert!(!manifest.contains("name = \"cdxm-codex-app-bridge\""));

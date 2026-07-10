@@ -172,14 +172,20 @@ mod tests {
             ManagedFile::CodexMonitor.destination(root),
             root.join("bin/codex-monitor.exe")
         );
-        assert_eq!(ManagedFile::Cdxm.destination(root), root.join("bin/cdxm.exe"));
+        assert_eq!(
+            ManagedFile::Cdxm.destination(root),
+            root.join("bin/cdxm.exe")
+        );
     }
 
     #[test]
     fn required_and_optional_file_sets_are_fixed() {
         assert!(ManagedFile::CodexMonitor.is_required());
         assert!(ManagedFile::Cdxm.is_required());
-        assert_eq!(ManagedFile::ALL, [ManagedFile::CodexMonitor, ManagedFile::Cdxm]);
+        assert_eq!(
+            ManagedFile::ALL,
+            [ManagedFile::CodexMonitor, ManagedFile::Cdxm]
+        );
         assert_eq!(ManagedFile::RELEASE, ManagedFile::ALL);
     }
 

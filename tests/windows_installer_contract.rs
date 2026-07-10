@@ -18,10 +18,8 @@ fn codex_monitor_skill() -> String {
 }
 
 fn foreground_helper() -> String {
-    fs::read_to_string(
-        repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh"),
-    )
-    .unwrap()
+    fs::read_to_string(repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh"))
+        .unwrap()
 }
 
 #[test]
@@ -203,39 +201,17 @@ fn agmsg_apply_does_not_disable_project_wide_legacy_agmsg_monitor_delivery() {
 }
 
 #[test]
-fn windows_installer_manages_codex_app_bridge_reversibly() {
+fn windows_installer_migrates_legacy_bridge_without_managing_processes() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
-
-    for required in [
-        "[switch]$InstallAppBridge",
-        "[switch]$RemoveAppBridge",
-        "[string]$RealCodexPath",
-        "cdxm-codex-app-bridge.exe",
-        "codex-app-real.exe",
-        "codex-code-mode-host.exe",
-        "codex-command-runner.exe",
-        "codex-windows-sandbox-setup.exe",
-        "app-bridge-env.json",
-        "CODEX_CLI_PATH",
-        "CDXM_REAL_CODEX",
-        "function Resolve-CodexRuntimeCompanionPath",
-        "function Copy-CdxmRuntimeFile",
-        "function Enable-CdxmAppBridge",
-        "function Disable-CdxmAppBridge",
-    ] {
-        assert!(
-            installer.contains(required),
-            "installer is missing app bridge contract `{required}`"
-        );
-    }
-    assert!(installer.contains("InstallAppBridge.IsPresent -and $RemoveAppBridge.IsPresent"));
-    assert!(installer.contains("Test-CdxmOwnedAppBridge"));
-    assert!(installer.contains("Copy-CdxmRuntimeFile $ResolvedRealCodexPath $ManagedRealCodex"));
-    assert!(installer.contains("$ManagedCodeModeHost"));
-    assert!(installer.contains("$ManagedCommandRunner"));
-    assert!(installer.contains("$ManagedSandboxSetup"));
-    assert!(installer.contains("Preserving the current user environment"));
-    assert!(installer.contains("Codex App must be restarted"));
+    assert!(!installer.contains("[switch]$InstallAppBridge"));
+    assert!(!installer.contains("[switch]$RemoveAppBridge"));
+    assert!(!installer.contains("[string]$RealCodexPath"));
+    assert!(installer.contains("function Migrate-CdxmLegacyAppBridge"));
+    assert!(installer.contains("previousCodexCliPath"));
+    assert!(installer.contains("previousCdxmRealCodex"));
+    assert!(installer.contains("Get-CimInstance Win32_Process"));
+    assert!(installer.contains("ExecutablePath"));
+    assert!(!installer.contains("Stop-Process"));
 }
 
 #[test]
@@ -246,9 +222,8 @@ fn windows_installer_has_prebuilt_download_path() {
     assert!(installer.contains("x86_64-pc-windows-msvc.zip"));
     assert!(installer.contains("Get-FileHash"));
     assert!(installer.contains("BuildFromSource"));
-    assert!(installer
-        .contains("$allowed = @('codex-monitor.exe', 'cdxm.exe', 'cdxm-codex-app-bridge.exe')"));
-    assert!(installer.contains("Join-Path $BinDir 'cdxm-codex-app-bridge.exe'"));
+    assert!(installer.contains("$allowed = @('codex-monitor.exe', 'cdxm.exe')"));
+    assert!(!installer.contains("$allowed = @('codex-monitor.exe', 'cdxm.exe',"));
 }
 
 #[test]

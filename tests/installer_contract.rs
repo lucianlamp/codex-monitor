@@ -48,7 +48,12 @@ fi
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("foreground-ready"));
     assert!(!stdout.contains("No new messages."));
-    assert_eq!(fs::read_to_string(temp.path().join("count")).unwrap().trim(), "3");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("count"))
+            .unwrap()
+            .trim(),
+        "3"
+    );
 }
 
 #[test]

@@ -144,9 +144,9 @@ fn run_apply_windows(manifest_path: &Path, parent_pid: u32) -> Result<i32> {
         }
 
         windows::wait_for_process_exit(parent_pid)?;
-        windows::ensure_app_not_running()?;
+        windows::ensure_legacy_bridge_not_running()?;
         let summary = apply::apply_manifest(&manifest)?;
-        windows::reassert_owned_environment(&expected_paths)?;
+        windows::finalize_environment(&expected_paths)?;
         apply::write_result_atomic(
             &expected_paths.update_result,
             &UpdateResult {

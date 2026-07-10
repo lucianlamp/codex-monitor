@@ -2,7 +2,7 @@ use super::model::InstallPaths;
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::HashSet,
     ffi::OsStr,
     path::{Path, PathBuf},
     process::Command,
@@ -10,37 +10,65 @@ use std::{
 
 const INVENTORY_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
-$package = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue |
-    Sort-Object Version -Descending |
-    Select-Object -First 1
 $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    ForEach-Object { $_.Name })
+    Where-Object { $_.ExecutablePath } |
+    ForEach-Object {
+        [ordered]@{
+            pid = [uint32]$_.ProcessId
+            path = $_.ExecutablePath
+        }
+    })
 [ordered]@{
-    installLocation = if ($package) { $package.InstallLocation } else { $null }
     userCodexCliPath = [Environment]::GetEnvironmentVariable('CODEX_CLI_PATH', 'User')
     userRealCodex = [Environment]::GetEnvironmentVariable('CDXM_REAL_CODEX', 'User')
     userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    processes = $processes
-} | ConvertTo-Json -Compress
+    processes = @($processes)
+} | ConvertTo-Json -Compress -Depth 4
+"#;
+
+const ENVIRONMENT_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+if ($env:CDXM_UPDATE_RESTORE_ENV -eq '1') {
+    $cli = if ($env:CDXM_UPDATE_CLI_PRESENT -eq '1') { $env:CDXM_UPDATE_CLI } else { $null }
+    $real = if ($env:CDXM_UPDATE_REAL_PRESENT -eq '1') { $env:CDXM_UPDATE_REAL } else { $null }
+    [Environment]::SetEnvironmentVariable('CODEX_CLI_PATH', $cli, 'User')
+    [Environment]::SetEnvironmentVariable('CDXM_REAL_CODEX', $real, 'User')
+}
+[Environment]::SetEnvironmentVariable('Path', $env:CDXM_UPDATE_USER_PATH, 'User')
 "#;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct LegacyProcess {
+    pid: u32,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WindowsInventory {
-    install_location: Option<PathBuf>,
     user_codex_cli_path: Option<PathBuf>,
-    #[allow(dead_code)]
-    user_real_codex: Option<PathBuf>,
     user_path: Option<String>,
     #[serde(default)]
-    processes: Vec<String>,
+    processes: Vec<LegacyProcess>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppBridgeBackup {
     version: u32,
+    previous_codex_cli_path: Option<PathBuf>,
+    previous_cdxm_real_codex: Option<PathBuf>,
     bridge_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum LegacyEnvironmentAction {
+    Preserve,
+    Restore {
+        codex_cli_path: Option<PathBuf>,
+        cdxm_real_codex: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -58,15 +86,9 @@ pub struct WindowsPreflight {
 pub fn preflight() -> anyhow::Result<WindowsPreflight> {
     let paths = install_paths()?;
     let inventory = query_inventory()?;
-    ensure_app_not_running_in(&inventory)?;
-    let backup = read_bridge_backup(&paths)?;
-    let user_bridge = inventory.user_codex_cli_path.as_deref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Codex App bridge is not enabled; run the one-time -InstallAppBridge installer first"
-        )
-    })?;
-    verify_owned_bridge(&paths, &backup, user_bridge)?;
-
+    ensure_legacy_files_not_running_in(&paths, &inventory)?;
+    let backup = read_owned_bridge_backup(&paths, &inventory)?;
+    let _ = plan_legacy_environment(&paths, &inventory, backup.as_ref())?;
     Ok(WindowsPreflight { paths })
 }
 
@@ -74,8 +96,10 @@ pub fn install_paths() -> anyhow::Result<InstallPaths> {
     Ok(InstallPaths::new(resolve_install_root()?))
 }
 
-pub fn ensure_app_not_running() -> anyhow::Result<()> {
-    ensure_app_not_running_in(&query_inventory()?)
+pub fn ensure_legacy_bridge_not_running() -> anyhow::Result<()> {
+    let paths = install_paths()?;
+    let inventory = query_inventory()?;
+    ensure_legacy_files_not_running_in(&paths, &inventory)
 }
 
 pub fn wait_for_process_exit(pid: u32) -> anyhow::Result<()> {
@@ -101,17 +125,13 @@ if ($parent) { $parent.WaitForExit() }
     Ok(())
 }
 
-pub fn reassert_owned_environment(paths: &InstallPaths) -> anyhow::Result<()> {
+pub fn finalize_environment(paths: &InstallPaths) -> anyhow::Result<()> {
     let inventory = query_inventory()?;
-    let backup = read_bridge_backup(paths)?;
-    let expected_bridge = paths.root.join("bin").join("cdxm-codex-app-bridge.exe");
-    let user_bridge = inventory
-        .user_codex_cli_path
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("CODEX_CLI_PATH is no longer owned by codex-monitor"))?;
-    verify_owned_bridge(paths, &backup, user_bridge)?;
+    ensure_legacy_files_not_running_in(paths, &inventory)?;
+    let had_backup = paths.app_bridge_backup.is_file();
+    let backup = read_owned_bridge_backup(paths, &inventory)?;
+    let action = plan_legacy_environment(paths, &inventory, backup.as_ref())?;
 
-    let real_codex = paths.root.join("runtime").join("codex-app-real.exe");
     let (preferred_path_entries, removed_path_entries) = public_cli_path_entries(paths)?;
     preserve_user_path_backup(paths, inventory.user_path.as_deref())?;
     let user_path = normalize_user_path(
@@ -119,28 +139,21 @@ pub fn reassert_owned_environment(paths: &InstallPaths) -> anyhow::Result<()> {
         &preferred_path_entries,
         &removed_path_entries,
     );
-    let script = r#"
-$ErrorActionPreference = 'Stop'
-[Environment]::SetEnvironmentVariable('CODEX_CLI_PATH', $env:CDXM_UPDATE_BRIDGE, 'User')
-[Environment]::SetEnvironmentVariable('CDXM_REAL_CODEX', $env:CDXM_UPDATE_REAL_CODEX, 'User')
-[Environment]::SetEnvironmentVariable('Path', $env:CDXM_UPDATE_USER_PATH, 'User')
-"#;
-    let output = Command::new(windows_powershell_executable())
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .env("CDXM_UPDATE_BRIDGE", &expected_bridge)
-        .env("CDXM_UPDATE_REAL_CODEX", &real_codex)
-        .env("CDXM_UPDATE_USER_PATH", &user_path)
-        .output()
-        .context("failed to start PowerShell environment update")?;
-    require_powershell_success(output, "updating the owned Codex App environment")?;
+    apply_environment(&action, &user_path)?;
+    cleanup_legacy_files(paths)?;
+
+    if matches!(action, LegacyEnvironmentAction::Restore { .. }) {
+        std::fs::remove_file(&paths.app_bridge_backup).with_context(|| {
+            format!(
+                "failed to remove migrated App bridge ownership file {}",
+                paths.app_bridge_backup.display()
+            )
+        })?;
+    } else if had_backup {
+        eprintln!(
+            "codex-monitor update preserved CODEX_CLI_PATH because it is not owned by this installation"
+        );
+    }
     Ok(())
 }
 
@@ -183,6 +196,171 @@ Remove-Item -LiteralPath $env:CDXM_UPDATE_STAGING -Recurse -Force -ErrorAction S
     Ok(())
 }
 
+fn legacy_bridge_path(paths: &InstallPaths) -> PathBuf {
+    paths.root.join("bin").join("cdxm-codex-app-bridge.exe")
+}
+
+fn legacy_runtime_dir(paths: &InstallPaths) -> PathBuf {
+    paths.root.join("runtime")
+}
+
+fn legacy_paths(paths: &InstallPaths) -> Vec<PathBuf> {
+    let runtime = legacy_runtime_dir(paths);
+    vec![
+        legacy_bridge_path(paths),
+        runtime.join("codex-app-real.exe"),
+        runtime.join("codex-code-mode-host.exe"),
+        runtime.join("codex-command-runner.exe"),
+        runtime.join("codex-windows-sandbox-setup.exe"),
+    ]
+}
+
+fn plan_legacy_environment(
+    paths: &InstallPaths,
+    inventory: &WindowsInventory,
+    backup: Option<&AppBridgeBackup>,
+) -> anyhow::Result<LegacyEnvironmentAction> {
+    let expected = legacy_bridge_path(paths);
+    let Some(current) = inventory.user_codex_cli_path.as_deref() else {
+        return Ok(LegacyEnvironmentAction::Preserve);
+    };
+    if !paths_equal(current, &expected) {
+        return Ok(LegacyEnvironmentAction::Preserve);
+    }
+
+    let backup = backup.with_context(|| {
+        format!(
+            "CODEX_CLI_PATH is the legacy bridge but its ownership file is missing: {}",
+            paths.app_bridge_backup.display()
+        )
+    })?;
+    if backup.version != 1 || !paths_equal(&backup.bridge_path, &expected) {
+        bail!(
+            "legacy App bridge ownership file does not match this installation: {}",
+            paths.app_bridge_backup.display()
+        );
+    }
+    Ok(LegacyEnvironmentAction::Restore {
+        codex_cli_path: backup.previous_codex_cli_path.clone(),
+        cdxm_real_codex: backup.previous_cdxm_real_codex.clone(),
+    })
+}
+
+fn ensure_legacy_files_not_running_in(
+    paths: &InstallPaths,
+    inventory: &WindowsInventory,
+) -> anyhow::Result<()> {
+    let legacy = legacy_paths(paths)
+        .into_iter()
+        .map(|path| normalized_path_key(&path.to_string_lossy()))
+        .collect::<HashSet<_>>();
+    let active = inventory
+        .processes
+        .iter()
+        .filter(|process| legacy.contains(&normalized_path_key(&process.path.to_string_lossy())))
+        .map(|process| format!("PID {} ({})", process.pid, process.path.display()))
+        .collect::<Vec<_>>();
+    if !active.is_empty() {
+        bail!(
+            "fully quit Codex App before migrating the legacy bridge (active: {})",
+            active.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn read_owned_bridge_backup(
+    paths: &InstallPaths,
+    inventory: &WindowsInventory,
+) -> anyhow::Result<Option<AppBridgeBackup>> {
+    let Some(current) = inventory.user_codex_cli_path.as_deref() else {
+        return Ok(None);
+    };
+    if !paths_equal(current, &legacy_bridge_path(paths)) {
+        return Ok(None);
+    }
+    if !paths.app_bridge_backup.is_file() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&paths.app_bridge_backup).with_context(|| {
+        format!(
+            "failed to read App bridge ownership file {}",
+            paths.app_bridge_backup.display()
+        )
+    })?;
+    serde_json::from_slice(&bytes).map(Some).with_context(|| {
+        format!(
+            "App bridge ownership file is invalid: {}",
+            paths.app_bridge_backup.display()
+        )
+    })
+}
+
+fn apply_environment(action: &LegacyEnvironmentAction, user_path: &str) -> anyhow::Result<()> {
+    let (restore, cli, real) = match action {
+        LegacyEnvironmentAction::Preserve => (false, None, None),
+        LegacyEnvironmentAction::Restore {
+            codex_cli_path,
+            cdxm_real_codex,
+        } => (true, codex_cli_path.as_ref(), cdxm_real_codex.as_ref()),
+    };
+    let output = Command::new(windows_powershell_executable())
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            ENVIRONMENT_SCRIPT,
+        ])
+        .env("CDXM_UPDATE_RESTORE_ENV", if restore { "1" } else { "0" })
+        .env(
+            "CDXM_UPDATE_CLI_PRESENT",
+            if cli.is_some() { "1" } else { "0" },
+        )
+        .env(
+            "CDXM_UPDATE_CLI",
+            cli.map_or_else(String::new, |p| p.to_string_lossy().into()),
+        )
+        .env(
+            "CDXM_UPDATE_REAL_PRESENT",
+            if real.is_some() { "1" } else { "0" },
+        )
+        .env(
+            "CDXM_UPDATE_REAL",
+            real.map_or_else(String::new, |p| p.to_string_lossy().into()),
+        )
+        .env("CDXM_UPDATE_USER_PATH", user_path)
+        .output()
+        .context("failed to start PowerShell environment update")?;
+    require_powershell_success(output, "updating codex-monitor user environment")?;
+    Ok(())
+}
+
+fn cleanup_legacy_files(paths: &InstallPaths) -> anyhow::Result<()> {
+    for path in legacy_paths(paths) {
+        if path.is_file() {
+            std::fs::remove_file(&path).with_context(|| {
+                format!(
+                    "failed to remove obsolete codex-monitor file {}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    let runtime = legacy_runtime_dir(paths);
+    if runtime.is_dir() && std::fs::read_dir(&runtime)?.next().is_none() {
+        std::fs::remove_dir(&runtime).with_context(|| {
+            format!(
+                "failed to remove empty legacy runtime directory {}",
+                runtime.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn resolve_install_root() -> anyhow::Result<PathBuf> {
     if let Some(root) = std::env::var_os("CDXM_INSTALL_ROOT") {
         let root = PathBuf::from(root);
@@ -208,35 +386,13 @@ fn query_inventory() -> anyhow::Result<WindowsInventory> {
             INVENTORY_SCRIPT,
         ])
         .output()
-        .context("failed to start PowerShell for Codex App inventory")?;
-    let stdout = require_powershell_success(output, "reading Codex App inventory")?;
+        .context("failed to start PowerShell for codex-monitor inventory")?;
+    let stdout = require_powershell_success(output, "reading codex-monitor inventory")?;
     parse_inventory(&stdout)
 }
 
 fn parse_inventory(text: &str) -> anyhow::Result<WindowsInventory> {
-    serde_json::from_str(text.trim()).context("Codex App inventory was not valid JSON")
-}
-
-fn ensure_app_not_running_in(inventory: &WindowsInventory) -> anyhow::Result<()> {
-    let blockers = inventory
-        .processes
-        .iter()
-        .filter(|name| blocks_update_process(name))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if !blockers.is_empty() {
-        bail!(
-            "fully quit Codex App before running codex-monitor update (active: {})",
-            blockers.into_iter().collect::<Vec<_>>().join(", ")
-        );
-    }
-    Ok(())
-}
-
-fn blocks_update_process(name: &str) -> bool {
-    ["cdxm-codex-app-bridge.exe", "codex-app-real.exe"]
-        .iter()
-        .any(|blocked| name.eq_ignore_ascii_case(blocked))
+    serde_json::from_str(text.trim()).context("codex-monitor inventory was not valid JSON")
 }
 
 fn public_cli_path_entries(paths: &InstallPaths) -> anyhow::Result<(Vec<PathBuf>, Vec<PathBuf>)> {
@@ -337,39 +493,6 @@ fn preserve_user_path_backup(paths: &InstallPaths, user_path: Option<&str>) -> a
     Ok(())
 }
 
-fn read_bridge_backup(paths: &InstallPaths) -> anyhow::Result<AppBridgeBackup> {
-    let bytes = std::fs::read(&paths.app_bridge_backup).with_context(|| {
-        format!(
-            "Codex App bridge ownership file is missing: {}; run the one-time -InstallAppBridge installer first",
-            paths.app_bridge_backup.display()
-        )
-    })?;
-    serde_json::from_slice(&bytes).with_context(|| {
-        format!(
-            "Codex App bridge ownership file is invalid: {}",
-            paths.app_bridge_backup.display()
-        )
-    })
-}
-
-fn verify_owned_bridge(
-    paths: &InstallPaths,
-    backup: &AppBridgeBackup,
-    user_bridge: &Path,
-) -> anyhow::Result<()> {
-    let expected = paths.root.join("bin").join("cdxm-codex-app-bridge.exe");
-    if backup.version != 1
-        || !paths_equal(&backup.bridge_path, &expected)
-        || !paths_equal(user_bridge, &expected)
-    {
-        bail!(
-            "Codex App bridge is not owned by this codex-monitor installation: {}",
-            expected.display()
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn paths_equal(left: &Path, right: &Path) -> bool {
     normalize_path(left.as_os_str()).eq_ignore_ascii_case(&normalize_path(right.as_os_str()))
 }
@@ -411,43 +534,107 @@ fn require_powershell_success(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::update::model::InstallPaths;
-    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
-    #[test]
-    fn app_process_inventory_blocks_update_case_insensitively() {
-        assert!(blocks_update_process("CDXM-CODEX-APP-BRIDGE.EXE"));
-        assert!(blocks_update_process("codex-app-real.exe"));
-        assert!(!blocks_update_process("Codex.exe"));
-        assert!(!blocks_update_process("codex-code-mode-host.exe"));
-        assert!(!blocks_update_process("codex-monitor.exe"));
+    fn fixture_inventory(user_codex_cli_path: Option<PathBuf>) -> WindowsInventory {
+        WindowsInventory {
+            user_codex_cli_path,
+            user_path: Some(r"C:\Tools".into()),
+            processes: Vec::new(),
+        }
     }
 
     #[test]
-    fn ownership_requires_backup_and_matching_user_bridge() {
+    fn native_environment_is_preserved() {
         let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
+        let inventory = fixture_inventory(Some(PathBuf::from(
+            r"C:\Users\me\AppData\Local\OpenAI\Codex\bin\signed\codex.exe",
+        )));
+        assert_eq!(
+            plan_legacy_environment(&paths, &inventory, None).unwrap(),
+            LegacyEnvironmentAction::Preserve
+        );
+    }
+
+    #[test]
+    fn owned_bridge_restores_saved_environment() {
+        let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
+        let expected = legacy_bridge_path(&paths);
+        let inventory = fixture_inventory(Some(expected.clone()));
         let backup = AppBridgeBackup {
             version: 1,
-            bridge_path: paths.root.join("bin").join("cdxm-codex-app-bridge.exe"),
+            previous_codex_cli_path: Some(PathBuf::from(r"C:\Native\codex.exe")),
+            previous_cdxm_real_codex: None,
+            bridge_path: expected,
         };
-        let expected = paths.root.join("bin").join("cdxm-codex-app-bridge.exe");
-        assert!(verify_owned_bridge(&paths, &backup, &expected).is_ok());
-        assert!(verify_owned_bridge(&paths, &backup, Path::new(r"C:\other.exe")).is_err());
+        assert_eq!(
+            plan_legacy_environment(&paths, &inventory, Some(&backup)).unwrap(),
+            LegacyEnvironmentAction::Restore {
+                codex_cli_path: Some(PathBuf::from(r"C:\Native\codex.exe")),
+                cdxm_real_codex: None,
+            }
+        );
     }
 
     #[test]
-    fn inventory_json_maps_app_package_environment_and_processes() {
+    fn owned_bridge_requires_valid_backup() {
+        let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
+        let inventory = fixture_inventory(Some(legacy_bridge_path(&paths)));
+        assert!(plan_legacy_environment(&paths, &inventory, None).is_err());
+    }
+
+    #[test]
+    fn unowned_environment_ignores_stale_invalid_backup() {
+        let temp = TempDir::new().unwrap();
+        let paths = InstallPaths::new(temp.path().join("install"));
+        std::fs::create_dir_all(&paths.root).unwrap();
+        std::fs::write(&paths.app_bridge_backup, b"not json").unwrap();
+        let inventory = fixture_inventory(Some(PathBuf::from(r"C:\Native\codex.exe")));
+
+        assert!(read_owned_bridge_backup(&paths, &inventory)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn inventory_json_maps_environment_and_exact_process_paths() {
         let inventory = parse_inventory(
-            r#"{"installLocation":"C:\\Program Files\\WindowsApps\\OpenAI.Codex_1","userCodexCliPath":"C:\\Users\\me\\.codex-monitor\\bin\\cdxm-codex-app-bridge.exe","userRealCodex":null,"userPath":"C:\\Tools","processes":["explorer.exe","Codex.exe"]}"#,
+            r#"{"userCodexCliPath":"C:\\Native\\codex.exe","userRealCodex":null,"userPath":"C:\\Tools","processes":[{"pid":42,"path":"C:\\Users\\me\\.codex-monitor\\bin\\cdxm-codex-app-bridge.exe"}]}"#,
         )
         .unwrap();
-        assert!(inventory
-            .install_location
-            .unwrap()
-            .ends_with("OpenAI.Codex_1"));
         assert_eq!(inventory.user_path.as_deref(), Some(r"C:\Tools"));
-        assert_eq!(inventory.processes, ["explorer.exe", "Codex.exe"]);
+        assert_eq!(inventory.processes[0].pid, 42);
+        assert!(inventory.processes[0]
+            .path
+            .ends_with("cdxm-codex-app-bridge.exe"));
+    }
+
+    #[test]
+    fn exact_active_legacy_path_blocks_migration() {
+        let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
+        let mut inventory = fixture_inventory(None);
+        inventory.processes.push(LegacyProcess {
+            pid: 42,
+            path: legacy_bridge_path(&paths),
+        });
+        let error = ensure_legacy_files_not_running_in(&paths, &inventory).unwrap_err();
+        assert!(error.to_string().contains("PID 42"));
+        assert!(error.to_string().contains("fully quit Codex App"));
+    }
+
+    #[test]
+    fn cleanup_removes_only_fixed_legacy_files() {
+        let temp = TempDir::new().unwrap();
+        let paths = InstallPaths::new(temp.path().join("install"));
+        for path in legacy_paths(&paths) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"legacy").unwrap();
+        }
+        let keep = paths.root.join("runtime").join("keep.txt");
+        std::fs::write(&keep, b"keep").unwrap();
+        cleanup_legacy_files(&paths).unwrap();
+        assert!(legacy_paths(&paths).iter().all(|path| !path.exists()));
+        assert!(keep.is_file());
     }
 
     #[test]
@@ -496,5 +683,4 @@ mod tests {
             .to_string_lossy()
             .ends_with(".tmp")));
     }
-
 }
