@@ -255,8 +255,13 @@ This uses the same non-waiting auto send path: active turn -> `turn/steer`,
 idle thread -> `turn/start`, then mark the agmsg row seen after ack.
 Use `--mode auto|start|steer` when diagnosing active-turn behavior.
 `cdxm agmsg watch ...` is a source-specific shortcut for the same adapter.
-App-server ack and saved state do not prove the current Codex UI rendered a
-visible event; verify visible `agmsg monitor event` separately for live smoke.
+The watcher retains the logical target and reconnects after endpoint, setup,
+or delivery failures. `--target app` and `--target auto` discover the current
+endpoint on every retry, and an event whose cursor was not saved is retried
+after reconnect. App-server ack and saved state do not prove the current Codex
+UI rendered a separate bubble: active-turn `turn/steer` input may reach the
+model without one. Verify model receipt in the intended loaded thread; test a
+separate visible event only when UI rendering itself is required.
 
 7. Manage durable macOS watch processes:
 

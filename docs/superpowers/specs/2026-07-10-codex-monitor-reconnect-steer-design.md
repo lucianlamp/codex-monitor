@@ -1,7 +1,7 @@
 # Codex Monitor Reconnect and Steer Delivery Design
 
 **Date:** 2026-07-10  
-**Status:** Approved for written-spec review
+**Status:** Implemented on feature branch
 
 ## Context
 

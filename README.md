@@ -517,10 +517,18 @@ acknowledges the request; `agmsg watch` does not wait for `turn/completed`.
 Use `--mode start`, `--mode steer`, or `--mode auto` to make delivery behavior
 explicit during diagnosis.
 
+A live watcher keeps the requested logical target and reconnects when endpoint
+resolution, transport setup, or delivery fails. For `--target app` and
+`--target auto`, each retry discovers the current App endpoint again. Because
+the source cursor remains unchanged until acknowledgement, the first
+unacknowledged event is retried after reconnect instead of being dropped.
+
 App-server ack and codex-monitor state advancement mean the app-server accepted the
 delivery. They do not prove that the current Codex UI rendered a visible
-message. Treat live smoke as two checks: codex-monitor state/inbox advancement, and a
-separate visible `agmsg monitor event` in the intended loaded thread.
+message. In particular, active-turn `turn/steer` input may reach the model
+without rendering as a separate App bubble. Treat live smoke as two checks:
+codex-monitor state/inbox advancement, and model receipt in the intended loaded
+thread; require a separate visible bubble only when that UI behavior matters.
 
 ### macOS LaunchAgent
 
