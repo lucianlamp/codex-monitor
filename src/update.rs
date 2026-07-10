@@ -3,6 +3,8 @@ use std::path::Path;
 
 mod archive;
 mod model;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(windows)]
 pub async fn run_update() -> Result<i32> {
