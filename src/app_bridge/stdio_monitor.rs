@@ -199,13 +199,14 @@ where
         app_input,
         app_write_tx,
         Arc::clone(&router),
-        ready_tx,
+        ready_tx.clone(),
     ));
     let mut child_pump = tokio::spawn(pump_child_output(
         child_output,
         app_output,
         Arc::clone(&router),
         Arc::clone(&clients),
+        ready_tx,
     ));
     let mut listener_task = tokio::spawn(accept_monitors(
         listener,
@@ -333,6 +334,7 @@ async fn pump_child_output<R, W>(
     mut app_output: W,
     router: SharedRouter,
     clients: Clients,
+    ready_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()>
 where
     R: AsyncBufRead + Unpin,
@@ -348,7 +350,11 @@ where
             write_app_line(&mut app_output, &line).await?;
             continue;
         };
-        let route = router.lock().await.route_child(&message);
+        let (route, became_ready) = {
+            let mut router = router.lock().await;
+            let became_ready = router.observe_child(&message);
+            (router.route_child(&message), became_ready)
+        };
         match route {
             ChildOutput::AppOnly => write_app_line(&mut app_output, &line).await?,
             ChildOutput::AppAndBroadcast(message) => {
@@ -372,6 +378,9 @@ where
                 }
             }
             ChildOutput::Drop => {}
+        }
+        if became_ready {
+            ready_tx.send_replace(true);
         }
     }
 }
@@ -615,6 +624,12 @@ mod tests {
         app_output.read_line(&mut line).await.unwrap();
         assert_eq!(line, child_initialize);
 
+        tokio::time::timeout(Duration::from_secs(1), ready_rx.changed())
+            .await
+            .expect("initialize response did not make the monitor ready")
+            .unwrap();
+        assert!(*ready_rx.borrow());
+
         let app_initialized = "{\"method\":\"initialized\",\"params\":{}}\n";
         test_app_write
             .write_all(app_initialized.as_bytes())
@@ -623,8 +638,6 @@ mod tests {
         line.clear();
         child_input.read_line(&mut line).await.unwrap();
         assert_eq!(line, app_initialized);
-        ready_rx.changed().await.unwrap();
-        assert!(*ready_rx.borrow());
 
         let (mut monitor, _) = connect_async(format!("ws://{address}")).await.unwrap();
         monitor

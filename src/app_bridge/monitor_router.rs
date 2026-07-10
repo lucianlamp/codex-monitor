@@ -31,6 +31,7 @@ pub(super) struct MonitorRouter {
     nonce: String,
     internal_prefix: String,
     ready: bool,
+    app_initialize_id: Option<Value>,
     next_sequence: u64,
     pending: HashMap<String, Pending>,
 }
@@ -47,14 +48,39 @@ impl MonitorRouter {
             internal_prefix: format!("cdxm:{nonce}:"),
             nonce,
             ready: false,
+            app_initialize_id: None,
             next_sequence: 1,
             pending: HashMap::new(),
         }
     }
 
     pub(super) fn observe_app(&mut self, message: &Value) -> bool {
-        if !self.ready && message.get("method").and_then(Value::as_str) == Some("initialized") {
+        if self.ready {
+            return false;
+        }
+        let method = message.get("method").and_then(Value::as_str);
+        if method == Some("initialized") {
             self.ready = true;
+            self.app_initialize_id = None;
+            return true;
+        }
+        if method == Some("initialize") {
+            self.app_initialize_id = message.get("id").cloned();
+        }
+        false
+    }
+
+    pub(super) fn observe_child(&mut self, message: &Value) -> bool {
+        if self.ready || message.get("result").is_none() {
+            return false;
+        }
+        let matches_initialize = self
+            .app_initialize_id
+            .as_ref()
+            .is_some_and(|id| message.get("id") == Some(id));
+        if matches_initialize {
+            self.ready = true;
+            self.app_initialize_id = None;
             return true;
         }
         false
@@ -210,6 +236,36 @@ mod tests {
         let ready = router.handle_monitor(7, json!({"id":3,"method":"thread/list","params":{}}));
         assert!(matches!(ready, MonitorInput::Forward(value)
             if value["id"].as_str().unwrap().starts_with("cdxm:bridge-nonce:7:")));
+    }
+
+    #[test]
+    fn successful_app_initialize_response_marks_the_monitor_ready() {
+        let mut router = MonitorRouter::new("bridge-nonce");
+        assert!(!router.observe_app(&json!({
+            "id": 10,
+            "method": "initialize",
+            "params": {}
+        })));
+
+        assert!(!router.observe_child(&json!({
+            "id": 11,
+            "result": {"serverInfo": {"name": "other"}}
+        })));
+        assert!(!router.observe_child(&json!({
+            "id": 10,
+            "error": {"code": -32000, "message": "not initialized"}
+        })));
+
+        assert!(router.observe_child(&json!({
+            "id": 10,
+            "result": {"serverInfo": {"name": "codex"}}
+        })));
+
+        let request = json!({"id":1,"method":"thread/loaded/list","params":{}});
+        assert!(matches!(
+            router.handle_monitor(4, request),
+            MonitorInput::Forward(_)
+        ));
     }
 
     #[test]
