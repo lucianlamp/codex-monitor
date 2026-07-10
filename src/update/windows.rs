@@ -99,7 +99,7 @@ pub struct WindowsPreflight {
 }
 
 pub fn preflight() -> anyhow::Result<WindowsPreflight> {
-    let paths = InstallPaths::new(resolve_install_root()?);
+    let paths = install_paths()?;
     let inventory = query_inventory()?;
     ensure_app_not_running_in(&inventory)?;
     let backup = read_bridge_backup(&paths)?;
@@ -119,6 +119,10 @@ pub fn preflight() -> anyhow::Result<WindowsPreflight> {
         paths,
         runtime_sources,
     })
+}
+
+pub fn install_paths() -> anyhow::Result<InstallPaths> {
+    Ok(InstallPaths::new(resolve_install_root()?))
 }
 
 pub fn stage_runtime(sources: &RuntimeSources, staging: &Path) -> anyhow::Result<Vec<StagedFile>> {
@@ -209,6 +213,45 @@ $ErrorActionPreference = 'Stop'
     Ok(())
 }
 
+pub fn schedule_staging_cleanup(staging: &Path, helper_pid: u32) -> anyhow::Result<()> {
+    use std::process::Stdio;
+
+    let name = staging
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if !staging.is_absolute() || !name.starts_with(".update-staging-") {
+        bail!(
+            "refusing unsafe update staging cleanup path: {}",
+            staging.display()
+        );
+    }
+    let script = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$helper = Get-Process -Id ([int]$env:CDXM_UPDATE_HELPER_PID) -ErrorAction SilentlyContinue
+if ($helper) { $helper.WaitForExit() }
+Remove-Item -LiteralPath $env:CDXM_UPDATE_STAGING -Recurse -Force -ErrorAction SilentlyContinue
+"#;
+    Command::new(windows_powershell_executable())
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("CDXM_UPDATE_HELPER_PID", helper_pid.to_string())
+        .env("CDXM_UPDATE_STAGING", staging)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to launch update staging cleanup")?;
+    Ok(())
+}
+
 fn resolve_install_root() -> anyhow::Result<PathBuf> {
     if let Some(root) = std::env::var_os("CDXM_INSTALL_ROOT") {
         let root = PathBuf::from(root);
@@ -261,7 +304,6 @@ fn ensure_app_not_running_in(inventory: &WindowsInventory) -> anyhow::Result<()>
 
 fn blocks_update_process(name: &str) -> bool {
     [
-        "codex.exe",
         "cdxm-codex-app-bridge.exe",
         "codex-app-real.exe",
         "codex-code-mode-host.exe",
@@ -305,7 +347,7 @@ fn verify_owned_bridge(
     Ok(())
 }
 
-fn paths_equal(left: &Path, right: &Path) -> bool {
+pub(crate) fn paths_equal(left: &Path, right: &Path) -> bool {
     normalize_path(left.as_os_str()).eq_ignore_ascii_case(&normalize_path(right.as_os_str()))
 }
 
@@ -352,9 +394,9 @@ mod tests {
 
     #[test]
     fn app_process_inventory_blocks_update_case_insensitively() {
-        assert!(blocks_update_process("Codex.exe"));
         assert!(blocks_update_process("CDXM-CODEX-APP-BRIDGE.EXE"));
         assert!(blocks_update_process("codex-app-real.exe"));
+        assert!(!blocks_update_process("Codex.exe"));
         assert!(!blocks_update_process("codex-monitor.exe"));
     }
 

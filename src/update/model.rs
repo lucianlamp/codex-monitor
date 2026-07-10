@@ -236,7 +236,7 @@ mod tests {
         let manifest = UpdateManifest {
             version: MANIFEST_VERSION,
             install_root: root.join("install"),
-            staging_root: root.join("staging"),
+            staging_root: root.join("install").join("staging"),
             files: files.clone(),
         };
         assert!(manifest.validate_shape().is_ok());
