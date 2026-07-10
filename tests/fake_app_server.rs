@@ -6,6 +6,10 @@ use std::io::{Read, Write};
 use std::net::TcpListener as StdTcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -396,6 +400,97 @@ async fn start_fake_active_turn_server() -> String {
         }
     });
     format!("ws://{}", addr)
+}
+
+async fn start_fake_reconnecting_active_turn_server() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let steer_attempts = Arc::new(AtomicUsize::new(0));
+    let server_attempts = Arc::clone(&steer_attempts);
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut ws = accept_async(stream).await.unwrap();
+            while let Some(message) = ws.next().await {
+                let Ok(Message::Text(text)) = message else {
+                    break;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                match request["method"].as_str().unwrap() {
+                    "initialize" => {
+                        ws.send(Message::Text(
+                            json!({ "id": request["id"], "result": {} })
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "initialized" => {}
+                    "thread/loaded/list" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": { "data": ["thread-1"], "nextCursor": null }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "thread/read" => {
+                        ws.send(Message::Text(
+                            json!({
+                                "id": request["id"],
+                                "result": {
+                                    "thread": {
+                                        "id": "thread-1",
+                                        "status": { "type": "active" },
+                                        "turns": [
+                                            { "id": "turn-active", "status": "inProgress" }
+                                        ]
+                                    }
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "turn/steer" => {
+                        let attempt = server_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                        if attempt == 1 {
+                            ws.send(Message::Text(
+                                json!({
+                                    "id": request["id"],
+                                    "error": { "message": "connection reset" }
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await
+                            .unwrap();
+                            let _ = ws.close(None).await;
+                            break;
+                        }
+                        ws.send(Message::Text(
+                            json!({ "id": request["id"], "result": {} })
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    other => panic!("unexpected method {other}"),
+                }
+            }
+        }
+    });
+    (format!("ws://{}", addr), steer_attempts)
 }
 
 async fn start_fake_idle_ack_only_server() -> String {
@@ -1368,6 +1463,72 @@ async fn monitor_watch_agmsg_dry_run_uses_agmsg_adapter() {
     assert!(stdout.contains("agmsg_id=1"));
     assert!(stdout.contains("cursor=1"));
     assert!(stdout.contains("dry-run\tnote\tno state update, no app-server turn sent"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn monitor_watch_reconnects_and_retries_unacknowledged_event() {
+    let (url, steer_attempts) = start_fake_reconnecting_active_turn_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("messages.db");
+    let team = format!("reconnect-team-{}", std::process::id());
+    write_agmsg_fixture_db(&db_path, &team, "target");
+    let local_app_data = dir.path().join("localappdata");
+    std::fs::create_dir_all(&local_app_data).unwrap();
+
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_cdxm"))
+        .env("HOME", dir.path())
+        .env("LOCALAPPDATA", &local_app_data)
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_CACHE_HOME", dir.path().join("cache"))
+        .args([
+            "--endpoint",
+            &url,
+            "monitor",
+            "watch",
+            "agmsg",
+            "--team",
+            &team,
+            "--name",
+            "target",
+            "--thread",
+            "thread-1",
+            "--mode",
+            "auto",
+            "--agmsg-db",
+            db_path.to_str().unwrap(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let observed_retry = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while steer_attempts.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+
+    if observed_retry.is_err() {
+        let _ = child.kill().await;
+        let output = child.wait_with_output().await.unwrap();
+        panic!(
+            "watcher did not retry the event; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert_eq!(steer_attempts.load(Ordering::SeqCst), 2);
+
+    let _ = child.kill().await;
+    let output = child.wait_with_output().await.unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("delivery failed"), "stderr: {stderr}");
+    assert!(
+        stderr.matches("monitor connected").count() >= 2,
+        "stderr: {stderr}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

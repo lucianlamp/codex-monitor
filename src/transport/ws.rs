@@ -125,6 +125,12 @@ async fn wait_ready(port: u16) -> anyhow::Result<()> {
     }
 }
 
+fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_frame_size(None)
+        .max_message_size(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,10 +169,4 @@ mod tests {
         assert_eq!(message["payload"].as_str(), Some(expected_payload.as_str()));
         server.await.unwrap();
     }
-}
-
-fn websocket_config() -> WebSocketConfig {
-    WebSocketConfig::default()
-        .max_frame_size(None)
-        .max_message_size(None)
 }
