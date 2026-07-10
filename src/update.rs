@@ -72,7 +72,7 @@ async fn run_update_windows() -> Result<i32> {
         "https://github.com/lucianlamp/codex-monitor/releases/latest/download".into()
     });
     println!("Downloading and verifying the latest codex-monitor release...");
-    let files = archive::download_latest_release(&release_base, &staging_root).await?;
+    let files = archive::download_latest_release(&release_base, &staging_root, platform).await?;
 
     let manifest = UpdateManifest {
         version: MANIFEST_VERSION,

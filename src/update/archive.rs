@@ -1,14 +1,17 @@
 use super::model::{sha256_bytes, sha256_file, ManagedFile, ReleasePlatform, StagedFile};
 use anyhow::{bail, Context};
+use flate2::read::GzDecoder;
 use std::{
     collections::BTreeSet,
     fs::File,
-    io::{Cursor, Write},
+    io::{Cursor, Read, Write},
     path::Path,
 };
+use tar::Archive;
 use zip::ZipArchive;
 
 const MAX_ARCHIVE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_EXTRACTED_FILE_BYTES: usize = 128 * 1024 * 1024;
 
 pub fn parse_checksum(text: &str) -> anyhow::Result<String> {
     let checksum = text.trim();
@@ -91,6 +94,86 @@ pub fn extract_release_zip(bytes: &[u8], destination: &Path) -> anyhow::Result<V
     Ok(staged)
 }
 
+pub fn extract_release_targz(
+    bytes: &[u8],
+    destination: &Path,
+    platform: ReleasePlatform,
+) -> anyhow::Result<Vec<StagedFile>> {
+    if platform == ReleasePlatform::WindowsX64 {
+        bail!("Windows releases must use the ZIP archive format");
+    }
+    let expected_name = ManagedFile::CodexMonitor.staged_name(platform);
+    let decoder = GzDecoder::new(bytes);
+    let mut archive = Archive::new(decoder);
+    let mut payload = None;
+
+    for entry in archive
+        .entries()
+        .context("release asset is not a readable tar.gz archive")?
+    {
+        let entry = entry.context("failed to read release tar entry")?;
+        if payload.is_some() {
+            bail!("release tar.gz must contain exactly one entry");
+        }
+        let path = entry.path().context("release tar entry path is invalid")?;
+        if path.as_ref() != Path::new(expected_name)
+            || entry.path_bytes().as_ref() != expected_name.as_bytes()
+        {
+            bail!(
+                "release tar.gz contains an unexpected or nested entry: {}",
+                path.display()
+            );
+        }
+        if !entry.header().entry_type().is_file() {
+            bail!("release tar.gz entry is not a regular file: {expected_name}");
+        }
+        if entry.size() > MAX_EXTRACTED_FILE_BYTES as u64 {
+            bail!("release executable exceeds the 128 MiB size limit");
+        }
+        let mut entry = entry.take(MAX_EXTRACTED_FILE_BYTES as u64 + 1);
+        let mut extracted = Vec::new();
+        entry
+            .read_to_end(&mut extracted)
+            .context("failed to read release executable")?;
+        if extracted.len() > MAX_EXTRACTED_FILE_BYTES {
+            bail!("release executable exceeds the 128 MiB size limit");
+        }
+        payload = Some(extracted);
+    }
+
+    let payload = payload.context("release tar.gz is missing codex-monitor")?;
+    std::fs::create_dir_all(destination).with_context(|| {
+        format!(
+            "failed to create release staging directory {}",
+            destination.display()
+        )
+    })?;
+    let output_path = destination.join(expected_name);
+    let mut output = File::create(&output_path)
+        .with_context(|| format!("failed to create staged file {}", output_path.display()))?;
+    output
+        .write_all(&payload)
+        .with_context(|| format!("failed to write staged file {}", output_path.display()))?;
+    output
+        .flush()
+        .with_context(|| format!("failed to flush staged file {}", output_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| {
+                format!(
+                    "failed to mark staged executable as runnable {}",
+                    output_path.display()
+                )
+            })?;
+    }
+    Ok(vec![StagedFile {
+        id: ManagedFile::CodexMonitor,
+        sha256: Some(sha256_file(&output_path)?),
+    }])
+}
+
 fn declared_zip_entry_count(bytes: &[u8]) -> anyhow::Result<usize> {
     const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
     const EOCD_SIZE: usize = 22;
@@ -121,13 +204,13 @@ fn declared_zip_entry_count(bytes: &[u8]) -> anyhow::Result<usize> {
     Ok(entries as usize)
 }
 
-#[cfg(windows)]
 pub async fn download_latest_release(
     release_base: &str,
     destination: &Path,
+    platform: ReleasePlatform,
 ) -> anyhow::Result<Vec<StagedFile>> {
     let base = release_base.trim_end_matches('/');
-    let archive_url = format!("{base}/{}", ReleasePlatform::WindowsX64.archive_name());
+    let archive_url = format!("{base}/{}", platform.archive_name());
     let checksum_url = format!("{archive_url}.sha256");
     let client = reqwest::Client::builder()
         .build()
@@ -166,13 +249,19 @@ pub async fn download_latest_release(
         bail!("release archive exceeds the 128 MiB size limit");
     }
     verify_sha256(&archive, &checksum)?;
-    extract_release_zip(&archive, destination)
+    if platform == ReleasePlatform::WindowsX64 {
+        extract_release_zip(&archive, destination)
+    } else {
+        extract_release_targz(&archive, destination, platform)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{write::GzEncoder, Compression};
     use std::io::{Cursor, Read, Write};
+    use tar::{Builder, EntryType, Header};
     use tempfile::TempDir;
     use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -188,6 +277,76 @@ mod tests {
 
     fn valid_entries() -> Vec<(&'static str, &'static [u8])> {
         vec![("codex-monitor.exe", b"monitor")]
+    }
+
+    #[derive(Clone, Copy)]
+    enum TarTestEntry<'a> {
+        Regular(&'a [u8]),
+        Symlink(&'a str),
+    }
+
+    fn targz_bytes(entries: &[(&str, TarTestEntry<'_>)]) -> Vec<u8> {
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut builder = Builder::new(encoder);
+        for (path, entry) in entries {
+            let mut header = Header::new_gnu();
+            header.set_mode(0o755);
+            match entry {
+                TarTestEntry::Regular(bytes) => {
+                    header.set_entry_type(EntryType::Regular);
+                    header.set_size(bytes.len() as u64);
+                    header.set_cksum();
+                    builder
+                        .append_data(&mut header, path, Cursor::new(*bytes))
+                        .unwrap();
+                }
+                TarTestEntry::Symlink(target) => {
+                    header.set_entry_type(EntryType::Symlink);
+                    header.set_size(0);
+                    header.set_link_name(target).unwrap();
+                    header.set_cksum();
+                    builder
+                        .append_data(&mut header, path, std::io::empty())
+                        .unwrap();
+                }
+            }
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn release_targz_extracts_one_native_binary() {
+        let bytes = targz_bytes(&[("codex-monitor", TarTestEntry::Regular(b"monitor"))]);
+        let destination = TempDir::new().unwrap();
+        let staged =
+            extract_release_targz(&bytes, destination.path(), ReleasePlatform::MacArm64).unwrap();
+        assert_eq!(staged.len(), 1);
+        assert_eq!(
+            std::fs::read(destination.path().join("codex-monitor")).unwrap(),
+            b"monitor"
+        );
+    }
+
+    #[test]
+    fn release_targz_rejects_unsafe_shapes() {
+        let cases = [
+            targz_bytes(&[("nested/codex-monitor", TarTestEntry::Regular(b"monitor"))]),
+            targz_bytes(&[("codex-monitor", TarTestEntry::Symlink("elsewhere"))]),
+            targz_bytes(&[("unexpected", TarTestEntry::Regular(b"monitor"))]),
+            targz_bytes(&[
+                ("codex-monitor", TarTestEntry::Regular(b"one")),
+                ("codex-monitor", TarTestEntry::Regular(b"two")),
+            ]),
+        ];
+
+        for (index, bytes) in cases.into_iter().enumerate() {
+            let destination = TempDir::new().unwrap();
+            assert!(
+                extract_release_targz(&bytes, destination.path(), ReleasePlatform::MacArm64,)
+                    .is_err(),
+                "unsafe tar case {index} was accepted"
+            );
+        }
     }
 
     fn duplicate_name_zip() -> Vec<u8> {
@@ -209,6 +368,40 @@ mod tests {
         );
         assert_eq!(declared_zip_entry_count(&archive).unwrap(), 2);
         archive
+    }
+
+    fn spawn_release_server(
+        archive: Vec<u8>,
+    ) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+        let checksum = sha256_bytes(&archive);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 2048];
+                let read = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                let body = if request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .contains(".sha256")
+                {
+                    checksum.as_bytes()
+                } else {
+                    archive.as_slice()
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+        (address, server)
     }
 
     #[test]
@@ -261,42 +454,38 @@ mod tests {
     #[tokio::test]
     async fn latest_release_download_verifies_checksum_before_extracting() {
         let archive = zip_bytes(&valid_entries());
-        let checksum = sha256_bytes(&archive);
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server_archive = archive.clone();
-        let server = std::thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = [0_u8; 2048];
-                let read = stream.read(&mut request).unwrap();
-                let request = String::from_utf8_lossy(&request[..read]);
-                let body = if request
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .contains(".sha256")
-                {
-                    checksum.as_bytes()
-                } else {
-                    server_archive.as_slice()
-                };
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                )
-                .unwrap();
-                stream.write_all(body).unwrap();
-            }
-        });
+        let (address, server) = spawn_release_server(archive);
 
         let destination = TempDir::new().unwrap();
-        let staged = download_latest_release(&format!("http://{address}"), destination.path())
-            .await
-            .unwrap();
+        let staged = download_latest_release(
+            &format!("http://{address}"),
+            destination.path(),
+            ReleasePlatform::WindowsX64,
+        )
+        .await
+        .unwrap();
         server.join().unwrap();
         assert_eq!(staged.len(), ManagedFile::RELEASE.len());
         assert!(destination.path().join("codex-monitor.exe").is_file());
+    }
+
+    #[tokio::test]
+    async fn latest_macos_release_download_verifies_checksum_before_extracting() {
+        let archive = targz_bytes(&[("codex-monitor", TarTestEntry::Regular(b"mac-monitor"))]);
+        let (address, server) = spawn_release_server(archive);
+        let destination = TempDir::new().unwrap();
+        let staged = download_latest_release(
+            &format!("http://{address}"),
+            destination.path(),
+            ReleasePlatform::MacArm64,
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(staged.len(), ManagedFile::RELEASE.len());
+        assert_eq!(
+            std::fs::read(destination.path().join("codex-monitor")).unwrap(),
+            b"mac-monitor"
+        );
     }
 }
