@@ -13,10 +13,6 @@ path = "src/lib.rs"
 name = "codex-monitor"
 path = "src/main.rs"
 
-[[bin]]
-name = "cdxm"
-path = "src/bin/cdxm.rs"
-
 [dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1.89"

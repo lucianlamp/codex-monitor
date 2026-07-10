@@ -1,27 +1,23 @@
 use std::{fs, path::Path, process::Command};
 
 #[test]
-fn package_exposes_only_public_binaries() {
+fn package_exposes_one_native_binary() {
     let manifest =
         fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
     assert!(manifest.contains("name = \"codex-monitor\""));
-    assert!(manifest.contains("name = \"cdxm\""));
+    assert!(!manifest.contains("name = \"cdxm\""));
     assert!(!manifest.contains("name = \"cdxm-codex-app-bridge\""));
 }
 
 #[test]
-fn package_exposes_codex_monitor_binaries() {
+fn package_exposes_codex_monitor_binary() {
     let primary = env!("CARGO_BIN_EXE_codex-monitor");
-    let short_alias = env!("CARGO_BIN_EXE_cdxm");
 
     let primary_output = Command::new(primary).arg("--help").output().unwrap();
-    let short_alias_output = Command::new(short_alias).arg("--help").output().unwrap();
 
     assert!(primary_output.status.success());
-    assert!(short_alias_output.status.success());
 
     let primary_help = String::from_utf8(primary_output.stdout).unwrap();
-    let short_alias_help = String::from_utf8(short_alias_output.stdout).unwrap();
 
     assert!(primary_help.contains("codex-monitor"));
     assert!(primary_help.contains("threads"));
@@ -33,7 +29,6 @@ fn package_exposes_codex_monitor_binaries() {
     assert!(!primary_help.contains("steer"));
     assert!(!primary_help.contains("loaded"));
     assert!(primary_help.contains("[default: auto]"));
-    assert!(short_alias_help.contains("codex-monitor"));
 }
 
 #[test]
@@ -60,7 +55,7 @@ fn client_info_name_contract_is_fixed() {
 
 #[test]
 fn agmsg_watch_can_target_cwd_without_explicit_thread() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["agmsg", "watch", "--help"])
         .output()
@@ -76,7 +71,7 @@ fn agmsg_watch_can_target_cwd_without_explicit_thread() {
 
 #[test]
 fn agmsg_help_exposes_doctor() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["agmsg", "--help"])
         .output()
@@ -91,7 +86,7 @@ fn agmsg_help_exposes_doctor() {
 
 #[test]
 fn agmsg_launch_agent_commands_are_exposed() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["agmsg", "launch-agent", "--help"])
         .output()
@@ -107,7 +102,7 @@ fn agmsg_launch_agent_commands_are_exposed() {
 
 #[test]
 fn agmsg_launch_agent_print_exposes_codex_monitor_path_option() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["agmsg", "launch-agent", "print", "--help"])
         .output()
@@ -120,7 +115,7 @@ fn agmsg_launch_agent_print_exposes_codex_monitor_path_option() {
 
 #[test]
 fn monitor_help_exposes_watch() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["monitor", "--help"])
         .output()
@@ -133,7 +128,7 @@ fn monitor_help_exposes_watch() {
 
 #[test]
 fn monitor_watch_exposes_agmsg_adapter() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["monitor", "watch", "--help"])
         .output()
@@ -146,7 +141,7 @@ fn monitor_watch_exposes_agmsg_adapter() {
 
 #[test]
 fn monitor_watch_agmsg_can_target_cwd_without_explicit_thread() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["monitor", "watch", "agmsg", "--help"])
         .output()
@@ -163,7 +158,7 @@ fn monitor_watch_agmsg_can_target_cwd_without_explicit_thread() {
 
 #[test]
 fn remote_help_focuses_on_doctor_as_primary_surface() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["remote", "--help"])
         .output()
@@ -177,12 +172,12 @@ fn remote_help_focuses_on_doctor_as_primary_surface() {
     assert!(!help.contains("disable"));
     assert!(!help.contains("clients"));
     assert!(!help.contains("claim"));
-    assert!(!help.contains("monitor"));
+    assert!(!help.contains("\n  monitor"));
 }
 
 #[test]
 fn remote_connect_is_visible_as_controller_probe() {
-    let alias = env!("CARGO_BIN_EXE_cdxm");
+    let alias = env!("CARGO_BIN_EXE_codex-monitor");
     let output = Command::new(alias)
         .args(["remote", "connect", "--help"])
         .output()

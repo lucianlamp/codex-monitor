@@ -33,16 +33,17 @@ fn release_workflow_packages_fixed_asset_names_with_checksums() {
     assert!(wf.contains("codex-monitor-${{ matrix.target }}.tar.gz"));
     assert!(wf.contains("codex-monitor-${{ matrix.target }}.zip"));
     assert!(wf.contains(".sha256"));
-    // builds both binaries
-    assert!(wf.contains("--bins") || (wf.contains("codex-monitor") && wf.contains("cdxm")));
+    assert!(wf.contains("cargo build --release --bin codex-monitor"));
+    assert!(!wf.contains("cargo build --release --bins"));
     // attaches to a GitHub release
     assert!(wf.contains("softprops/action-gh-release"));
 }
 
 #[test]
-fn windows_release_packages_only_public_binaries() {
+fn release_packages_one_native_binary() {
     let wf = workflow();
     assert!(wf.contains("release/codex-monitor.exe"));
-    assert!(wf.contains("release/cdxm.exe"));
+    assert!(!wf.contains("release/cdxm.exe"));
     assert!(!wf.contains("release/cdxm-codex-app-bridge.exe"));
+    assert!(!wf.contains("codex-monitor cdxm"));
 }
