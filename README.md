@@ -100,8 +100,9 @@ For a local source install without touching the Codex shim:
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -NoShim
 ```
 
-To make the Windows Codex App and `cdxm` share the exact same app-server,
-enable the reversible App bridge and restart Codex App:
+To make the Windows Codex App and `cdxm` share the exact same app-server while
+preserving the App's native stdio transport, enable the reversible App monitor
+bridge and restart Codex App:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -Source .
@@ -117,6 +118,13 @@ external bridge and Codex resolves those helpers as sibling files. An explicit
 `-RealCodexPath` must point to a directory containing
 `codex-code-mode-host.exe`.
 
+The bridge transparently proxies the App's native JSONL stdio and exposes a
+separate loopback WebSocket with only `initialize`, `initialized`,
+`thread/list`, `thread/read`, `thread/loaded/list`, `turn/start`, and
+`turn/steer`. Other app-server methods are rejected. Keeping the real App
+session on stdio preserves Browser Use and in-app Playwright behavior while the
+minimal endpoint handles loaded-thread discovery and monitor delivery.
+
 After a Codex App update, fully quit Codex App and run this from any directory:
 
 ```powershell
@@ -129,6 +137,12 @@ the private App-bundled Codex runtime and its matching helpers as one
 rollback-safe transaction. It refuses to mutate files while Codex App or the
 shared bridge is active. Reopen Codex App after the completion message. The
 command does not start, stop, or replace monitor watchers.
+
+After restarting, verify both sides: `cdxm --target app loaded` must include the
+visible thread, and the in-app Browser must navigate to
+`https://www.google.com/` with a non-empty Playwright DOM snapshot. If Browser
+reports a network-policy rejection, remove the bridge and restart App rather
+than trying to bypass that policy.
 
 To restore the prior environment:
 
@@ -303,10 +317,12 @@ On Unix, `--target app` connects to:
 $HOME/.codex/app-server-control/app-server-control.sock
 ```
 
-On Windows, `--target app` discovers the loopback WebSocket listener published
-by the installed Codex App bridge. It refuses ordinary CLI app-server
-processes. If several live bridge endpoints exist, use `--endpoint` to select
-one explicitly.
+On Windows, `--target app` discovers the restricted loopback WebSocket listener
+published by the installed Codex App bridge. The App's real app-server remains
+on native stdio. The listener accepts only loaded-thread discovery and
+`turn/start`/`turn/steer` delivery methods, and it refuses ordinary CLI
+app-server processes. If several live bridge endpoints exist, use `--endpoint`
+to select one explicitly.
 
 `--endpoint ws://127.0.0.1:<port>` connects to an explicit loopback WebSocket.
 `--endpoint unix:///path/to/app-server.sock` connects to an explicit Unix

@@ -13,6 +13,10 @@ fn apply_helper() -> String {
         .unwrap()
 }
 
+fn codex_monitor_skill() -> String {
+    fs::read_to_string(repo_root().join("skills/codex-monitor/SKILL.md")).unwrap()
+}
+
 #[test]
 fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
@@ -35,6 +39,22 @@ fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
     assert!(installer.contains("[Environment]::SetEnvironmentVariable('Path'"));
     // The PowerShell shim reimplementation is gone.
     assert!(!installer.contains("codex-monitor-shim.ps1"));
+}
+
+#[test]
+fn docs_define_browser_safe_minimal_app_monitor_bridge() {
+    let skill = codex_monitor_skill();
+    for required in [
+        "native stdio",
+        "thread/loaded/list",
+        "turn/start",
+        "turn/steer",
+        "Browser",
+        "refusing Windows Desktop Codex fallback",
+    ] {
+        assert!(skill.contains(required), "missing `{required}`");
+    }
+    assert!(!skill.contains("as a final fallback"));
 }
 
 #[test]

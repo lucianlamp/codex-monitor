@@ -134,8 +134,9 @@ Use `-InstallShim` only when the user explicitly wants the Codex CLI shim:
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -InstallShim
 ```
 
-For the Windows Codex App itself, use the separate reversible shared-server
-bridge. This is required when delivery must reach the exact visible App thread:
+For the Windows Codex App itself, use the separate reversible native stdio
+monitor bridge. This is required when delivery must reach the exact visible App
+thread without changing the App's Browser policy surface:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yes -NoShim -NoPath -InstallAppBridge -Source .
@@ -145,6 +146,15 @@ The installer must stage both the App-bundled Codex executable and its matching
 `codex-code-mode-host.exe` (plus available command-runner and sandbox helpers)
 in `~/.codex-monitor/runtime`. If `-RealCodexPath` is supplied explicitly, its
 directory must contain the matching code-mode host.
+
+The bridge keeps the App-to-Codex app-server connection on native stdio and
+publishes a separate loopback-only monitor endpoint. That endpoint accepts only
+`initialize`, `initialized`, `thread/list`, `thread/read`,
+`thread/loaded/list`, `turn/start`, and `turn/steer`. Account, remote-control,
+approval, tool, MCP, upload, and download methods are rejected locally. This
+minimal boundary allows monitor delivery without converting the App session to
+a WebSocket app-server, which is required for Browser Use to retain its normal
+network-policy identity.
 
 After Codex App or codex-monitor is updated, fully quit Codex App and run from
 any directory:
@@ -167,6 +177,11 @@ target. Apply an agmsg receiver for that exact App endpoint with
 `cdxm-agmsg-apply.sh --target app ...`. Roll back with
 `-SkipBuild -RemoveAppBridge` and another App restart.
 
+After every bridge install or update, also run one in-app Browser acceptance:
+navigate to `https://www.google.com/` and require Playwright to read a non-empty
+DOM snapshot. A browser security-policy rejection means the App did not retain
+its native stdio identity; roll back the bridge instead of bypassing policy.
+
 For daily Codex CLI monitor use, confirm the Codex entrypoint is shim-backed:
 
 ```bash
@@ -186,10 +201,11 @@ be agmsg's shim; the important property is that interactive CLI launches become
 app-server-bound so `cdxm targets` can discover the live endpoint without the
 user manually typing `--remote`.
 
-When `CODEX_MONITOR_REAL_CODEX` is not set, automatic shim discovery treats the
-Windows Desktop-bundled `%LOCALAPPDATA%\OpenAI\Codex\bin\codex` as a final
-fallback. A package-manager Codex elsewhere on PATH is preferred so an older
-Desktop copy cannot silently downgrade CLI sessions.
+When `CODEX_MONITOR_REAL_CODEX` is not set, automatic shim discovery rejects the
+Windows Desktop-bundled `%LOCALAPPDATA%\OpenAI\Codex\bin\codex`. If no npm or
+other package-manager CLI is available, it fails with
+`refusing Windows Desktop Codex fallback` instead of silently downgrading the
+terminal session.
 
 Windows builds support the `cdxm` CLI, WebSocket/stdio transports, Codex CLI
 shim, and the agmsg SQLite adapter. Use native PowerShell for installation and
