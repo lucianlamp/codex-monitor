@@ -1,0 +1,65 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: macos-26-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build release binaries
+        run: cargo build --release --bins --target ${{ matrix.target }}
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="codex-monitor-${{ matrix.target }}"
+          staging="$(mktemp -d)"
+          cp "target/${{ matrix.target }}/release/codex-monitor" "$staging/"
+          cp "target/${{ matrix.target }}/release/cdxm" "$staging/"
+          tar -czf "$name.tar.gz" -C "$staging" codex-monitor cdxm
+          shasum -a 256 "$name.tar.gz" | awk '{print $1}' > "$name.tar.gz.sha256"
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $name = "codex-monitor-${{ matrix.target }}"
+          $staging = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "stage")
+          Copy-Item "target/${{ matrix.target }}/release/codex-monitor.exe" $staging
+          Copy-Item "target/${{ matrix.target }}/release/cdxm.exe" $staging
+          Compress-Archive -Path (Join-Path $staging '*') -DestinationPath "$name.zip" -Force
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline "$name.zip.sha256"
+      - name: Upload to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            codex-monitor-${{ matrix.target }}.tar.gz
+            codex-monitor-${{ matrix.target }}.tar.gz.sha256
+            codex-monitor-${{ matrix.target }}.zip
+            codex-monitor-${{ matrix.target }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

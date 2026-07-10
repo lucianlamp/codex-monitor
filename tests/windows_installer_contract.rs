@@ -160,6 +160,16 @@ fn windows_installer_manages_codex_app_bridge_reversibly() {
 }
 
 #[test]
+fn windows_installer_has_prebuilt_download_path() {
+    let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
+    assert!(installer.contains("releases/latest/download"));
+    assert!(installer.contains("CDXM_INSTALL_RELEASE_BASE"));
+    assert!(installer.contains("x86_64-pc-windows-msvc.zip"));
+    assert!(installer.contains("Get-FileHash"));
+    assert!(installer.contains("BuildFromSource"));
+}
+
+#[test]
 fn readme_documents_windows_native_install() {
     let readme = fs::read_to_string(repo_root().join("README.md")).unwrap();
 

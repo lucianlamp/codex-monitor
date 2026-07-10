@@ -19,6 +19,12 @@ One-liner install:
 curl -fsSL https://raw.githubusercontent.com/lucianlamp/codex-monitor/main/install.sh | bash
 ```
 
+On **macOS arm64** and **macOS x86_64**, the installer downloads a prebuilt
+binary from GitHub Releases and verifies its SHA256 checksum — no Rust or
+Cargo toolchain is needed. On other platforms (e.g. Linux), or when
+`--build-from-source` is passed, it falls back to a source build, which
+requires Rust and Cargo.
+
 The installer asks before each user-visible step:
 
 - install `cdxm` and `codex-monitor` under `$HOME/.codex-monitor/bin`
@@ -31,6 +37,8 @@ exists, the installer leaves it untouched unless you explicitly request the
 shim (`--install-shim`); in that case it reports the detected kind, keeps a
 backup of the previous entrypoint (`codex.bak-<timestamp>`), and installs the
 codex-monitor shim.
+
+Pass `--skip-build` to register skills and shim without installing binaries.
 
 From this repository, the equivalent local install is:
 
@@ -48,6 +56,12 @@ requires Git Bash:
 ```powershell
 iwr https://raw.githubusercontent.com/lucianlamp/codex-monitor/main/install.ps1 -UseBasicParsing | iex
 ```
+
+On **Windows x86_64**, the installer downloads a prebuilt binary from GitHub
+Releases and verifies its SHA256 checksum — no Rust, Cargo, or MSVC Build
+Tools are needed for the prebuilt path. Passing `-BuildFromSource` falls back
+to a source build, which still requires the Rust MSVC toolchain plus
+MSVC Build Tools.
 
 From this repository, the equivalent local install is:
 
@@ -72,8 +86,7 @@ installer leaves it untouched unless you explicitly request the shim
 the previous entrypoint (`codex.cmd.bak-<timestamp>`), and installs the
 codex-monitor shim.
 
-Because native `agmsg watch` reads SQLite through bundled `rusqlite`, building
-from source on Windows requires the Rust MSVC toolchain plus MSVC Build Tools.
+Pass `-SkipBuild` to register skills and shim without installing binaries.
 
 For a non-interactive install with the shim:
 
