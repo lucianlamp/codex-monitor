@@ -102,6 +102,41 @@ fn installer_installs_skill_and_optional_shim_without_building() {
 }
 
 #[test]
+fn cdxm_launcher_forwards_arguments_and_exit_status() {
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new("bash")
+        .arg(repo_root().join("install.sh"))
+        .arg("--source")
+        .arg(repo_root())
+        .arg("--yes")
+        .arg("--no-shim")
+        .arg("--skip-build")
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let bin = home.path().join(".codex-monitor/bin");
+    let primary = bin.join("codex-monitor");
+    fs::write(
+        &primary,
+        "#!/usr/bin/env sh\nprintf '%s\\n' \"$*\"\nexit 23\n",
+    )
+    .unwrap();
+    fs::set_permissions(&primary, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let alias = Command::new(bin.join("cdxm"))
+        .args(["one", "two words"])
+        .output()
+        .unwrap();
+    assert_eq!(alias.status.code(), Some(23));
+    assert_eq!(
+        String::from_utf8(alias.stdout).unwrap().trim(),
+        "one two words"
+    );
+}
+
+#[test]
 fn installer_backs_up_and_replaces_foreign_codex_entrypoint() {
     let home = tempfile::tempdir().unwrap();
     let agents_bin = home.path().join(".agents/bin");

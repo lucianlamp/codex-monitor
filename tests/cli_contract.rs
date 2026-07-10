@@ -32,6 +32,16 @@ fn package_exposes_codex_monitor_binary() {
 }
 
 #[test]
+fn unix_installer_uses_single_native_binary_and_cdxm_launcher() {
+    let installer =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh")).unwrap();
+    assert!(installer.contains("tar -xzf \"$dl_dir/$archive\" -C \"$extract_dir\" codex-monitor"));
+    assert!(!installer.contains("codex-monitor cdxm"));
+    assert!(installer.contains("cargo install --path \"$SOURCE_DIR\" --bin codex-monitor"));
+    assert!(installer.contains("exec \"$SCRIPT_DIR/codex-monitor\" \"$@\""));
+}
+
+#[test]
 fn update_command_is_public_and_apply_worker_is_hidden() {
     let primary = env!("CARGO_BIN_EXE_codex-monitor");
     let help = Command::new(primary).arg("--help").output().unwrap();

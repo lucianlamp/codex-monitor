@@ -198,29 +198,42 @@ download_prebuilt() {
   fi
 
   mkdir -p "$extract_dir"
-  if ! tar -xzf "$dl_dir/$archive" -C "$extract_dir" codex-monitor cdxm; then
-    echo "Prebuilt archive did not contain the expected binaries; falling back to source build." >&2
+  if ! tar -xzf "$dl_dir/$archive" -C "$extract_dir" codex-monitor; then
+    echo "Prebuilt archive did not contain codex-monitor; falling back to source build." >&2
     rm -rf "$dl_dir"
     return 1
   fi
-  if [ ! -f "$extract_dir/codex-monitor" ] || [ ! -f "$extract_dir/cdxm" ]; then
-    echo "Prebuilt archive did not contain the expected binaries; falling back to source build." >&2
+  if [ ! -f "$extract_dir/codex-monitor" ]; then
+    echo "Prebuilt archive did not contain codex-monitor; falling back to source build." >&2
     rm -rf "$dl_dir"
     return 1
   fi
 
   mkdir -p "$BIN_DIR"
   install -m 0755 "$extract_dir/codex-monitor" "$BIN_DIR/codex-monitor"
-  install -m 0755 "$extract_dir/cdxm" "$BIN_DIR/cdxm"
-  xattr -d com.apple.quarantine "$BIN_DIR/codex-monitor" "$BIN_DIR/cdxm" 2>/dev/null || true
+  xattr -d com.apple.quarantine "$BIN_DIR/codex-monitor" 2>/dev/null || true
+  write_cdxm_launcher
   rm -rf "$dl_dir"
-  echo "Installed prebuilt cdxm to $BIN_DIR/cdxm"
+  echo "Installed prebuilt codex-monitor to $BIN_DIR/codex-monitor"
   return 0
+}
+
+write_cdxm_launcher() {
+  mkdir -p "$BIN_DIR"
+  cat > "$BIN_DIR/cdxm" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$SCRIPT_DIR/codex-monitor" "$@"
+EOF
+  chmod 0755 "$BIN_DIR/cdxm"
+  echo "Installed cdxm compatibility launcher to $BIN_DIR/cdxm"
 }
 
 install_binaries() {
   if [ "$SKIP_BUILD" -eq 1 ]; then
     mkdir -p "$BIN_DIR"
+    write_cdxm_launcher
     echo "Skipped binary install (--skip-build)."
     return 0
   fi
@@ -240,8 +253,9 @@ install_binaries() {
   fi
 
   mkdir -p "$INSTALL_ROOT"
-  cargo install --path "$SOURCE_DIR" --bins --force --root "$INSTALL_ROOT"
-  echo "Installed cdxm to $BIN_DIR/cdxm"
+  cargo install --path "$SOURCE_DIR" --bin codex-monitor --force --root "$INSTALL_ROOT"
+  write_cdxm_launcher
+  echo "Installed codex-monitor to $BIN_DIR/codex-monitor"
 }
 
 install_skill() {
