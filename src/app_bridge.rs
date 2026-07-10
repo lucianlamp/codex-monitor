@@ -9,7 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, Command};
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{protocol::WebSocketConfig, Message};
 
 use crate::target::{Endpoint, EndpointCandidate};
 
@@ -329,9 +329,17 @@ where
     if !is_safe_loopback_endpoint(endpoint) {
         anyhow::bail!("refusing unsafe Codex App bridge endpoint: {endpoint}");
     }
-    let (mut websocket, _) = tokio_tungstenite::connect_async(endpoint)
-        .await
-        .with_context(|| format!("failed to connect Codex App bridge to {endpoint}"))?;
+    // The App can request complete thread snapshots that exceed tungstenite's
+    // default 16 MiB frame and 64 MiB message limits. This is a transparent
+    // loopback proxy between two trusted Codex processes, so payload limits
+    // belong to the App and app-server rather than the bridge.
+    let websocket_config = WebSocketConfig::default()
+        .max_frame_size(None)
+        .max_message_size(None);
+    let (mut websocket, _) =
+        tokio_tungstenite::connect_async_with_config(endpoint, Some(websocket_config), false)
+            .await
+            .with_context(|| format!("failed to connect Codex App bridge to {endpoint}"))?;
     let mut line = String::new();
 
     loop {
@@ -347,22 +355,16 @@ where
                 if trimmed.is_empty() {
                     continue;
                 }
-                serde_json::from_str::<serde_json::Value>(trimmed)
-                    .with_context(|| "Codex App wrote invalid JSONL to the bridge")?;
                 websocket.send(Message::Text(trimmed.to_owned().into())).await?;
             }
             incoming = websocket.next() => {
                 match incoming.transpose()? {
                     Some(Message::Text(text)) => {
-                        serde_json::from_str::<serde_json::Value>(&text)
-                            .with_context(|| "app-server sent invalid JSON over the bridge WebSocket")?;
                         output.write_all(text.as_bytes()).await?;
                         output.write_all(b"\n").await?;
                         output.flush().await?;
                     }
                     Some(Message::Binary(bytes)) => {
-                        serde_json::from_slice::<serde_json::Value>(&bytes)
-                            .with_context(|| "app-server sent invalid binary JSON over the bridge WebSocket")?;
                         output.write_all(&bytes).await?;
                         output.write_all(b"\n").await?;
                         output.flush().await?;
@@ -437,6 +439,44 @@ mod tests {
         reader.read_line(&mut second).await.unwrap();
         assert_eq!(first.trim(), r#"{"id":1,"result":{}}"#);
         assert!(second.contains("item/tool/requestUserInput"));
+
+        test_write.shutdown().await.unwrap();
+        proxy.await.unwrap().unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxy_forwards_frames_larger_than_tungstenite_default_limit() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let expected_payload_len = (16 * 1024 * 1024) + 1;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let message = format!(
+                r#"{{"id":1,"result":{{"payload":"{}"}}}}"#,
+                "x".repeat(expected_payload_len)
+            );
+            websocket.send(Message::Text(message.into())).await.unwrap();
+            websocket.next().await;
+        });
+
+        let (test_io, bridge_io) = tokio::io::duplex(64 * 1024);
+        let (test_read, mut test_write) = tokio::io::split(test_io);
+        let (bridge_read, bridge_write) = tokio::io::split(bridge_io);
+        let proxy_endpoint = endpoint.clone();
+        let proxy = tokio::spawn(async move {
+            proxy_jsonl_websocket_io(&proxy_endpoint, BufReader::new(bridge_read), bridge_write)
+                .await
+        });
+
+        let mut reader = BufReader::new(test_read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert!(line.len() > expected_payload_len);
+        assert!(line.ends_with("\n"));
 
         test_write.shutdown().await.unwrap();
         proxy.await.unwrap().unwrap();

@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(v["id"], 1);
         assert_eq!(v["params"]["clientInfo"]["name"], "codex-monitor");
         assert_eq!(v["params"]["clientInfo"]["title"], "Codex Monitor");
-        assert_eq!(v["params"]["clientInfo"]["version"], "0.1.0");
+        assert_eq!(v["params"]["clientInfo"]["version"], "0.2.0");
         assert_eq!(v["params"]["capabilities"]["experimentalApi"], true);
     }
 
