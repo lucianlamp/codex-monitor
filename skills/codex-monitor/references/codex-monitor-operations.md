@@ -20,6 +20,10 @@ Joined-persona apply:
 ~/.codex/skills/codex-monitor/scripts/cdxm-agmsg-apply.sh /path/to/project --team dev --name kimura
 ```
 
+This is the exact `$codex-monitor` path in Codex CLI. It applies a durable
+Windows background watcher or macOS LaunchAgent and must not be replaced with
+the App-only `cdxm-agmsg-foreground.sh` helper or `--foreground` mode.
+
 The apply helper supports multiple Codex sessions in the same cwd by resolving
 the current session persona from explicit args/env, `AGMSG_CODEX_NAME`, or the
 agmsg thread-name marker written by `/agmsg actas`. When it can resolve the

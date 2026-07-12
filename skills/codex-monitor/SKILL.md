@@ -29,6 +29,21 @@ Keep the product boundary source-agnostic:
 Treat `agmsg` as the first adapter example. Prefer `cdxm monitor watch <adapter>`
 for new workflows; `cdxm agmsg watch ...` is a source-specific shortcut.
 
+## Shortcut Runtime Routing
+
+Choose the runtime branch before interpreting `$codex-monitor`. Treat the host
+as Codex App only when the runtime explicitly identifies itself as Codex App in
+the current system context. Otherwise treat the host as Codex CLI. Windows,
+the presence of this skill, or a discoverable app-server endpoint do not by
+themselves identify Codex App.
+
+In Codex CLI, exact `$codex-monitor` means apply the session-scoped durable
+receiver described under **CLI Chat Shortcuts**. Never run
+`cdxm-agmsg-foreground.sh` for the CLI shortcut and do not pass `--foreground`
+to `cdxm-agmsg-apply.sh`. The apply helper may return after setup, but the
+Windows background watcher or macOS LaunchAgent must remain as the durable
+receiver. The foreground inbox helper is Codex App-only.
+
 ## Codex App Shortcuts
 
 These exact shortcuts apply when the current host is Codex App. They keep the
@@ -107,10 +122,11 @@ other task's heartbeat.
 
 ## CLI Chat Shortcuts
 
-Outside Codex App, when the user sends exactly `$codex-monitor`, apply the
-codex-monitor agmsg receiver for this Codex session's current persona in the
-current cwd. Multiple Codex sessions in one cwd are supported; do not collapse
-them to a single cwd-level identity. Run:
+In Codex CLI, when the user sends exactly `$codex-monitor`, apply the
+codex-monitor agmsg durable receiver for this Codex session's current persona
+in the current cwd. Multiple Codex sessions in one cwd are supported; do not
+collapse them to a single cwd-level identity. Do not substitute the App-only
+foreground inbox helper. Run:
 
 ```bash
 ~/.codex/skills/codex-monitor/scripts/cdxm-agmsg-apply.sh [cwd]

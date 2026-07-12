@@ -94,6 +94,32 @@ fn docs_define_native_app_monitor_shortcuts() {
 }
 
 #[test]
+fn skill_routes_cli_codex_monitor_to_durable_apply_before_app_foreground_wait() {
+    let skill = codex_monitor_skill();
+    let normalized = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+    let routing = skill
+        .find("## Shortcut Runtime Routing")
+        .expect("skill must define shortcut runtime routing");
+    let app = skill
+        .find("## Codex App Shortcuts")
+        .expect("skill must define App shortcuts");
+
+    assert!(routing < app, "runtime routing must precede App shortcuts");
+    for required in [
+        "Treat the host as Codex App only when the runtime explicitly identifies itself as Codex App",
+        "Otherwise treat the host as Codex CLI",
+        "Never run `cdxm-agmsg-foreground.sh` for the CLI shortcut",
+        "do not pass `--foreground`",
+        "durable receiver",
+    ] {
+        assert!(
+            normalized.contains(required),
+            "missing CLI routing contract `{required}`"
+        );
+    }
+}
+
+#[test]
 fn windows_installer_isolates_the_public_cli_path() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
 
@@ -146,6 +172,8 @@ fn shared_shim_passes_through_non_interactive_codex_commands() {
 fn agmsg_apply_uses_windows_background_watch_instead_of_launch_agent() {
     let helper = apply_helper();
 
+    assert!(helper.contains("apply=1"));
+    assert!(helper.contains("foreground=0"));
     assert!(helper.contains("windows background watch"));
     assert!(helper.contains("monitor watch agmsg"));
     assert!(helper.contains("LOCALAPPDATA"));

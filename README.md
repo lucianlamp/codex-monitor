@@ -119,6 +119,12 @@ inside one blocking tool call. Empty polls stay local and do not start model
 turns. Heartbeat mode is opt-in for delivery after the current turn completes.
 Neither mode starts a watcher or changes the App executable.
 
+In Codex CLI, `$codex-monitor` has different semantics: it runs
+`cdxm-agmsg-apply.sh` and applies a durable receiver for the current session.
+On Windows that receiver is a detached background `monitor watch`; on macOS it
+is a loaded LaunchAgent. The App-only foreground inbox helper must not be used
+for the CLI shortcut.
+
 Run updates from any directory on Windows or macOS:
 
 ```bash
