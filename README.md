@@ -118,8 +118,15 @@ The default mode installs one dormant global Stop hook and enables it with a
 marker scoped to the current App session. After every completed turn, its
 internal foreground helper calls the installed agmsg `inbox.sh` until a message
 arrives. Empty polls stay local and do not start model turns; a real message is
-returned as a Stop continuation prompt and the marker automatically re-arms for
-the next completed turn. The first hook definition or a changed definition must
+saved as a session-private pending delivery before it is returned as a Stop
+continuation prompt. The pending delivery is acknowledged only when that
+continuation finishes and reaches the next Stop. If a user input interrupts the
+continuation before it appears, the next ordinary Stop replays the same pending
+message instead of consuming another inbox row. Delivery is therefore
+at-least-once: an ambiguous interruption can repeat a message, but cannot silently
+lose it. The marker automatically re-arms for the next completed turn, and
+`$codex-monitor off` removes both the marker and its pending delivery. The first
+hook definition or a changed definition must
 be trusted once in **Codex App Settings > Hooks**: review the handler whose
 status is `Waiting for agmsg via codex-monitor`, then choose **Trust**. The
 `/hooks` command is not required. Heartbeat mode remains an explicit fallback.
