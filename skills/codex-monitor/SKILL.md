@@ -91,11 +91,13 @@ remains active, so the next completed turn enters Stop-hook waiting again.
 `stop_hook_active=true` is expected during these continuations and must not
 disable re-arming.
 
-When `enable` prints `trust-required`, tell the user to open `/hooks` and trust
-the exact codex-monitor Stop hook. Never modify `[hooks.state]` or bypass hook
-trust. A new App task or App restart may be needed when the current hook registry
-does not reload a newly added definition. Do not start, install, replace, or
-daemonize a watcher.
+When `enable` prints `trust-required`, tell the user to open **Codex App
+Settings > Hooks**, review the handler whose status is
+`Waiting for agmsg via codex-monitor`, and choose **Trust**. The `/hooks`
+command is not required.
+Never modify `[hooks.state]` or bypass hook trust. A new App task or App restart
+may be needed when the current hook registry does not reload a newly added
+definition. Do not start, install, replace, or daemonize a watcher.
 
 ### `$codex-monitor heartbeat`: one-minute heartbeat
 

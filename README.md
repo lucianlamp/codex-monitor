@@ -120,7 +120,9 @@ internal foreground helper calls the installed agmsg `inbox.sh` until a message
 arrives. Empty polls stay local and do not start model turns; a real message is
 returned as a Stop continuation prompt and the marker automatically re-arms for
 the next completed turn. The first hook definition or a changed definition must
-be reviewed once through `/hooks`. Heartbeat mode remains an explicit fallback.
+be trusted once in **Codex App Settings > Hooks**: review the handler whose
+status is `Waiting for agmsg via codex-monitor`, then choose **Trust**. The
+`/hooks` command is not required. Heartbeat mode remains an explicit fallback.
 Neither mode starts a watcher or changes the App executable.
 
 In Codex CLI, `$codex-monitor` has different semantics: it runs
