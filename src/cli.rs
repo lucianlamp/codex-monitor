@@ -36,6 +36,12 @@ pub enum TargetKind {
 pub enum Commands {
     Targets,
     Update,
+    AppHook {
+        #[command(subcommand)]
+        command: AppHookCommand,
+    },
+    #[command(name = "__app-stop-hook", hide = true)]
+    AppStopHook,
     #[command(name = "__apply-update", hide = true)]
     ApplyUpdate {
         #[arg(long)]
@@ -89,6 +95,28 @@ pub enum Commands {
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AppHookCommand {
+    Enable {
+        #[arg(long)]
+        team: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        cwd: PathBuf,
+    },
+    Disable {
+        #[arg(long)]
+        session: String,
+    },
+    Status {
+        #[arg(long)]
+        session: String,
     },
 }
 
@@ -331,6 +359,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<i32> {
     let requested_endpoint = endpoint_from_options(cli.endpoint.clone(), cli.target);
     match cli.command {
         Commands::Update => crate::update::run_update().await,
+        Commands::AppHook { command } => run_app_hook_command(command),
+        Commands::AppStopHook => crate::app_hook::run_stop_hook_from_stdio().await,
         Commands::ApplyUpdate {
             manifest,
             parent_pid,
@@ -465,6 +495,62 @@ pub async fn run(cli: Cli) -> anyhow::Result<i32> {
         Commands::Remote { command } => {
             let endpoint = crate::target::resolve_default_auto_endpoint(requested_endpoint)?;
             run_remote_command(endpoint, command).await
+        }
+    }
+}
+
+fn run_app_hook_command(command: AppHookCommand) -> anyhow::Result<i32> {
+    let paths = crate::app_hook::default_paths()?;
+    match command {
+        AppHookCommand::Enable {
+            team,
+            name,
+            session,
+            cwd,
+        } => {
+            let cwd = cwd
+                .canonicalize()
+                .with_context(|| format!("failed to resolve App hook cwd {}", cwd.display()))?;
+            let executable = std::env::current_exe().context("failed to locate codex-monitor")?;
+            let change = crate::app_hook::ensure_hook_installed(&paths, &executable)?;
+            let marker = crate::app_hook::AppHookMarker::new(session.clone(), team, name, cwd)?;
+            crate::app_hook::enable_marker(&paths, &marker)?;
+            println!(
+                "app-hook\tenabled\tsession={}\thook={}\tteam={}\tname={}\tcwd={}",
+                session,
+                change.as_str(),
+                marker.team,
+                marker.name,
+                marker.cwd.display()
+            );
+            if change != crate::app_hook::HookChange::Unchanged {
+                println!("app-hook\ttrust-required\taction=/hooks");
+            }
+            Ok(0)
+        }
+        AppHookCommand::Disable { session } => {
+            let removed = crate::app_hook::disable_marker(&paths, &session)?;
+            println!("app-hook\tdisabled\tsession={session}\tremoved={removed}");
+            Ok(0)
+        }
+        AppHookCommand::Status { session } => {
+            let installed = crate::app_hook::hook_is_installed(&paths)?;
+            let marker = crate::app_hook::load_marker(&paths, &session)?;
+            if let Some(marker) = marker {
+                println!(
+                    "app-hook\tstatus\tsession={}\tinstalled={}\tenabled=true\tteam={}\tname={}\tcwd={}",
+                    session,
+                    installed,
+                    marker.team,
+                    marker.name,
+                    marker.cwd.display()
+                );
+            } else {
+                println!(
+                    "app-hook\tstatus\tsession={session}\tinstalled={installed}\tenabled=false"
+                );
+            }
+            Ok(0)
         }
     }
 }

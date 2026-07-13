@@ -35,6 +35,16 @@ pub enum HookChange {
     Unchanged,
 }
 
+impl HookChange {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AppHookMarker {
     pub version: u32,
@@ -149,6 +159,40 @@ pub fn ensure_hook_installed(
     let encoded = serde_json::to_vec_pretty(&root).context("failed to encode Codex hooks")?;
     atomic_write(&paths.hooks_json, &encoded)?;
     Ok(change)
+}
+
+pub fn hook_is_installed(paths: &AppHookPaths) -> anyhow::Result<bool> {
+    let raw = match fs::read(&paths.hooks_json) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to read Codex hooks from {}",
+                    paths.hooks_json.display()
+                )
+            })
+        }
+    };
+    let root: Value = serde_json::from_slice(&raw).with_context(|| {
+        format!(
+            "existing Codex hook configuration is not valid JSON: {}",
+            paths.hooks_json.display()
+        )
+    })?;
+    Ok(root
+        .get("hooks")
+        .and_then(|hooks| hooks.get("Stop"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flatten()
+        .any(is_owned_handler))
+}
+
+pub async fn run_stop_hook_from_stdio() -> anyhow::Result<i32> {
+    bail!("App Stop hook execution is not implemented")
 }
 
 pub fn enable_marker(paths: &AppHookPaths, marker: &AppHookMarker) -> anyhow::Result<()> {

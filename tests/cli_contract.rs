@@ -69,6 +69,35 @@ fn update_command_is_public_and_apply_worker_is_hidden() {
 }
 
 #[test]
+fn app_hook_commands_are_public_and_handler_is_hidden() {
+    let primary = env!("CARGO_BIN_EXE_codex-monitor");
+    let help = Command::new(primary).arg("--help").output().unwrap();
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    assert!(help.contains("app-hook"));
+    assert!(!help.contains("__app-stop-hook"));
+
+    let nested = Command::new(primary)
+        .args(["app-hook", "--help"])
+        .output()
+        .unwrap();
+    assert!(nested.status.success());
+    let nested = String::from_utf8(nested.stdout).unwrap();
+    for command in ["enable", "disable", "status"] {
+        assert!(
+            nested.contains(command),
+            "missing app-hook command `{command}`"
+        );
+    }
+
+    let hidden = Command::new(primary)
+        .args(["__app-stop-hook", "--help"])
+        .output()
+        .unwrap();
+    assert!(hidden.status.success());
+}
+
+#[test]
 fn internal_macos_finalizer_is_hidden_but_registered() {
     let primary = env!("CARGO_BIN_EXE_codex-monitor");
     let help = Command::new(primary).arg("--help").output().unwrap();
