@@ -20,12 +20,16 @@ pub struct AppHookPaths {
 }
 
 impl AppHookPaths {
-    #[cfg(test)]
-    fn for_test(root: &Path) -> Self {
+    fn from_root(root: &Path) -> Self {
         Self {
             hooks_json: root.join(".codex/hooks.json"),
             markers_dir: root.join(".codex-monitor/app-hooks"),
         }
+    }
+
+    #[cfg(test)]
+    fn for_test(root: &Path) -> Self {
+        Self::from_root(root)
     }
 }
 
@@ -81,11 +85,11 @@ impl AppHookMarker {
 }
 
 pub fn default_paths() -> anyhow::Result<AppHookPaths> {
+    if let Some(root) = std::env::var_os("CDXM_APP_HOOK_ROOT") {
+        return Ok(AppHookPaths::from_root(&PathBuf::from(root)));
+    }
     let base = BaseDirs::new().context("could not resolve the user home directory")?;
-    Ok(AppHookPaths {
-        hooks_json: base.home_dir().join(".codex/hooks.json"),
-        markers_dir: base.home_dir().join(".codex-monitor/app-hooks"),
-    })
+    Ok(AppHookPaths::from_root(base.home_dir()))
 }
 
 pub fn ensure_hook_installed(
@@ -201,9 +205,13 @@ pub async fn run_stop_hook_from_stdio() -> anyhow::Result<i32> {
     let input: StopHookInput =
         serde_json::from_str(&raw).context("Codex Stop hook input is not valid JSON")?;
     let paths = default_paths()?;
+    let Some(marker) = matching_marker(&paths, &input)? else {
+        println!("{}", json!({ "continue": true }));
+        return Ok(0);
+    };
     let bash = resolve_bash()?;
     let helper = foreground_helper_path()?;
-    let output = run_stop_hook_with_paths(&paths, input, &bash, &helper).await?;
+    let output = run_active_stop_hook(marker, &bash, &helper).await?;
     println!(
         "{}",
         serde_json::to_string(&output).context("failed to encode Stop hook output")?
@@ -219,25 +227,46 @@ struct StopHookInput {
     stop_hook_active: bool,
 }
 
+#[cfg(test)]
 async fn run_stop_hook_with_paths(
     paths: &AppHookPaths,
     input: StopHookInput,
     bash: &Path,
     helper: &Path,
 ) -> anyhow::Result<Value> {
+    let Some(marker) = matching_marker(paths, &input)? else {
+        return Ok(json!({ "continue": true }));
+    };
+    run_active_stop_hook(marker, bash, helper).await
+}
+
+fn matching_marker(
+    paths: &AppHookPaths,
+    input: &StopHookInput,
+) -> anyhow::Result<Option<AppHookMarker>> {
     validate_session_id(&input.session_id)?;
     if input.turn_id.trim().is_empty() {
         bail!("Codex Stop hook turn id must be non-empty");
     }
     let _already_continued = input.stop_hook_active;
     let Some(marker) = load_marker(paths, &input.session_id)? else {
-        return Ok(json!({ "continue": true }));
+        return Ok(None);
     };
-    let input_cwd = input.cwd.canonicalize().unwrap_or(input.cwd);
+    let input_cwd = input
+        .cwd
+        .canonicalize()
+        .unwrap_or_else(|_| input.cwd.clone());
     if input_cwd != marker.cwd {
-        return Ok(json!({ "continue": true }));
+        return Ok(None);
     }
+    Ok(Some(marker))
+}
 
+async fn run_active_stop_hook(
+    marker: AppHookMarker,
+    bash: &Path,
+    helper: &Path,
+) -> anyhow::Result<Value> {
     let helper_arg = helper_path_for_bash(helper);
     let mut command = Command::new(bash);
     command

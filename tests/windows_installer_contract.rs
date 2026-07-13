@@ -43,6 +43,8 @@ fn foreground_helper_contract() {
 fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
 
+    assert!(installer.contains("skills\\codex-monitor"));
+    assert!(installer.contains("Copy-Item -Recurse -Force $sourceSkill $SkillDir"));
     assert!(installer.contains("$ShimTarget = Join-Path $AgentsBin 'codex.cmd'"));
     // The generated codex.cmd is a thin launcher that runs the shared bash
     // shim through Git Bash (same logic as macOS/Linux), not a separate

@@ -108,7 +108,13 @@ fn installer_installs_skill_and_optional_shim_without_building() {
     assert!(skill.exists());
     assert!(fs::read_to_string(&skill)
         .unwrap()
-        .contains("name: codex-monitor"));
+        .contains("app-hook enable"));
+    let foreground = home
+        .path()
+        .join(".codex/skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh");
+    assert!(fs::read_to_string(foreground)
+        .unwrap()
+        .contains("CDXM_FOREGROUND_PARENT_PID"));
 
     let shim = home.path().join(".agents/bin/codex");
     let shim_text = fs::read_to_string(&shim).unwrap();
