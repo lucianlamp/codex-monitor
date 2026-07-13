@@ -6,6 +6,10 @@ use std::{
     process::{Command, Stdio},
 };
 
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
 fn bash_path() -> PathBuf {
     #[cfg(windows)]
     {
@@ -32,16 +36,20 @@ fn stop_hook(
     bash: &Path,
     payload: &Value,
 ) -> std::process::Output {
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("__app-stop-hook")
         .env("CDXM_APP_HOOK_ROOT", root)
         .env("CDXM_APP_HOOK_FOREGROUND_HELPER", helper)
         .env("CDXM_BASH", bash)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let scripts = root.join("agmsg-scripts");
+    if scripts.is_dir() {
+        command.env("AGMSG_SCRIPTS_DIR", scripts);
+    }
+    let mut child = command.spawn().unwrap();
     child
         .stdin
         .take()
@@ -49,6 +57,58 @@ fn stop_hook(
         .write_all(payload.to_string().as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn installed_foreground_helper_accepts_native_owner_pid() {
+    let binary = env!("CARGO_BIN_EXE_codex-monitor");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let cwd = root.canonicalize().unwrap();
+    let enable = Command::new(binary)
+        .args([
+            "app-hook",
+            "enable",
+            "--team",
+            "cdxm",
+            "--name",
+            "codex",
+            "--session",
+            "native-owner",
+            "--cwd",
+            cwd.to_str().unwrap(),
+        ])
+        .env("CDXM_APP_HOOK_ROOT", root)
+        .output()
+        .unwrap();
+    assert!(enable.status.success());
+
+    let scripts = root.join("agmsg-scripts");
+    fs::create_dir_all(&scripts).unwrap();
+    fs::write(
+        scripts.join("inbox.sh"),
+        "#!/usr/bin/env bash\nprintf '1 new message(s):\\n\\n  [now] alice: native owner live\\n\\n'\n",
+    )
+    .unwrap();
+    let helper = repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh");
+    let payload = json!({
+        "session_id": "native-owner",
+        "cwd": cwd,
+        "turn_id": "turn-native-owner",
+        "stop_hook_active": false
+    });
+    let output = stop_hook(binary, root, &helper, &bash_path(), &payload);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["decision"], "block");
+    assert!(result["reason"]
+        .as_str()
+        .unwrap()
+        .contains("native owner live"));
 }
 
 #[test]

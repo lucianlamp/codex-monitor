@@ -278,8 +278,9 @@ async fn run_active_stop_hook(
         .arg(helper_arg)
         .arg(&marker.team)
         .arg(&marker.name)
-        .env("CDXM_FOREGROUND_PARENT_PID", std::process::id().to_string())
         .kill_on_drop(true);
+    #[cfg(not(windows))]
+    command.env("CDXM_FOREGROUND_PARENT_PID", std::process::id().to_string());
     let output = command.output().await.with_context(|| {
         format!(
             "failed to run App foreground helper {} through {}",
