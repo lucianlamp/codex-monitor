@@ -83,7 +83,7 @@ pub fn resolve_app_endpoint(endpoint: Endpoint) -> anyhow::Result<Endpoint> {
 #[cfg(windows)]
 fn select_windows_app_endpoint(_: Vec<EndpointCandidate>) -> anyhow::Result<Endpoint> {
     bail!(
-        "Windows uses the native Codex App runtime; use `$codex-monitor` for foreground delivery or `$codex-monitor heartbeat` for persistent delivery"
+        "Windows uses the native Codex App runtime; use `$codex-monitor` for session Stop hook delivery or `$codex-monitor heartbeat` as a fallback"
     )
 }
 
@@ -601,7 +601,9 @@ node /Users/me/.agents/skills/agmsg/scripts/codex-bridge.js --project /tmp/p --a
         let message = error.to_string();
         assert!(message.contains("native Codex App"));
         assert!(message.contains("$codex-monitor"));
+        assert!(message.contains("Stop hook"));
         assert!(message.contains("heartbeat"));
+        assert!(!message.contains("foreground delivery"));
     }
 
     #[test]

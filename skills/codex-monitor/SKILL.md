@@ -61,17 +61,20 @@ ask the user to run `/agmsg actas <name>` or send `$codex-monitor <team> <name>`
 do not pick a persona silently. If the current conversation already established
 the active persona, do not ask again.
 
-### `$codex-monitor`: foreground wait
+### `$codex-monitor`: session Stop hook wait
 
-Keep the current turn alive by running this helper in the foreground through
-Git Bash with the longest supported tool timeout:
+Enable the dormant global Stop hook for only the current App task. Resolve the
+current target thread id and cwd, then run:
 
 ```bash
-~/.codex/skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh <team> <name>
+codex-monitor app-hook enable --team <team> --name <name> --session <thread-id> --cwd <cwd>
+codex-monitor app-hook status --session <thread-id>
 ```
 
-The helper suppresses `No new messages.` locally. When it returns messages,
-present each one in the current task as:
+The installed hook invokes the internal `cdxm-agmsg-foreground.sh` helper only
+after a turn stops. Empty inbox polls stay inside the hook process and do not
+create model turns. When a message arrives, the hook returns a Stop continuation
+whose reason contains each message in this format:
 
 ```text
 agmsg monitor event
@@ -83,10 +86,18 @@ Sender: <sender>
 <message>
 ```
 
-If a message requires a reply, use the installed agmsg `send.sh`. Then run the
-foreground helper again instead of completing the turn. If the user steers an
-ordinary request into the active turn, answer it and resume the helper. Do not
-start, install, replace, or daemonize a watcher.
+If a message requires a reply, use the installed agmsg `send.sh`. The marker
+remains active, so the next completed turn enters Stop-hook waiting again.
+`stop_hook_active=true` is expected during these continuations and must not
+disable re-arming.
+
+When `enable` prints `trust-required`, tell the user to open **Codex App
+Settings > Hooks**, review the handler whose status is
+`Waiting for agmsg via codex-monitor`, and choose **Trust**. The `/hooks`
+command is not required.
+Never modify `[hooks.state]` or bypass hook trust. A new App task or App restart
+may be needed when the current hook registry does not reload a newly added
+definition. Do not start, install, replace, or daemonize a watcher.
 
 ### `$codex-monitor heartbeat`: one-minute heartbeat
 
@@ -114,11 +125,18 @@ raw recurrence rule to the user.
 
 ### `$codex-monitor off`: current-task cleanup
 
-Treat this steer as normal cancellation of the current foreground tool call.
+If the Stop hook is currently waiting, treat the user's interrupt as normal
+cancellation of that owned hook call. Resolve the current target thread id and
+run:
+
+```bash
+codex-monitor app-hook disable --session <thread-id>
+```
+
 Resolve the same team/name and target thread, find the matching deterministic
 heartbeat, and delete only that automation with `automation_update`. A missing
-match is a successful no-op. Do not stop a PID, watcher, CLI consumer, or any
-other task's heartbeat.
+marker or heartbeat is a successful no-op. Do not stop a PID, watcher, CLI
+consumer, or any other task's heartbeat.
 
 ## CLI Chat Shortcuts
 
@@ -235,10 +253,10 @@ the migration itself. An active legacy `cdxm.exe` is left running and its fixed
 file is removed by a later update after the consumer exits. New `cdxm` commands
 already resolve through `cdxm.cmd` to `codex-monitor.exe`. It never stops a
 process. The updater does not manage
-foreground waits, heartbeat automations, watchers, or CLI consumers.
+Stop-hook markers, heartbeat automations, watchers, or CLI consumers.
 
 On Windows, `--target app` is intentionally unavailable because native App does
-not expose a safe external injection endpoint. Use `$codex-monitor` foreground
+not expose a safe external injection endpoint. Use `$codex-monitor` Stop hook
 wait or `$codex-monitor heartbeat`. Browser acceptance remains a native App
 check: Google must load with a non-empty Playwright DOM snapshot.
 

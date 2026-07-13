@@ -57,6 +57,33 @@ fi
 }
 
 #[test]
+fn foreground_helper_exits_before_polling_when_owner_is_gone() {
+    let temp = tempfile::tempdir().unwrap();
+    let scripts = temp.path().join("agmsg");
+    fs::create_dir_all(&scripts).unwrap();
+    let inbox = scripts.join("inbox.sh");
+    fs::write(
+        &inbox,
+        "#!/usr/bin/env bash\nprintf 'unexpected poll\\n' > \"$AGMSG_TEST_OUTPUT\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&inbox, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output_path = temp.path().join("polled");
+    let output = Command::new("bash")
+        .arg(repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh"))
+        .args(["cdxm", "codex"])
+        .env("AGMSG_SCRIPTS_DIR", &scripts)
+        .env("AGMSG_TEST_OUTPUT", &output_path)
+        .env("CDXM_FOREGROUND_PARENT_PID", "999999999")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(!output_path.exists());
+}
+
+#[test]
 fn installer_installs_skill_and_optional_shim_without_building() {
     let home = tempfile::tempdir().unwrap();
     let output = Command::new("bash")
@@ -81,7 +108,13 @@ fn installer_installs_skill_and_optional_shim_without_building() {
     assert!(skill.exists());
     assert!(fs::read_to_string(&skill)
         .unwrap()
-        .contains("name: codex-monitor"));
+        .contains("app-hook enable"));
+    let foreground = home
+        .path()
+        .join(".codex/skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh");
+    assert!(fs::read_to_string(foreground)
+        .unwrap()
+        .contains("CDXM_FOREGROUND_PARENT_PID"));
 
     let shim = home.path().join(".agents/bin/codex");
     let shim_text = fs::read_to_string(&shim).unwrap();

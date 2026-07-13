@@ -29,6 +29,8 @@ fn foreground_helper_contract() {
     assert!(helper.contains("No new messages."));
     assert!(helper.contains("while :"));
     assert!(helper.contains("exit 0"));
+    assert!(helper.contains("CDXM_FOREGROUND_PARENT_PID"));
+    assert!(helper.contains("kill -0 \"$owner_pid\""));
     for forbidden in ["nohup", "pidfile", "monitor watch", "launch-agent"] {
         assert!(
             !helper.contains(forbidden),
@@ -41,6 +43,8 @@ fn foreground_helper_contract() {
 fn windows_installer_routes_codex_through_git_bash_to_shared_shim() {
     let installer = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
 
+    assert!(installer.contains("skills\\codex-monitor"));
+    assert!(installer.contains("Copy-Item -Recurse -Force $sourceSkill $SkillDir"));
     assert!(installer.contains("$ShimTarget = Join-Path $AgentsBin 'codex.cmd'"));
     // The generated codex.cmd is a thin launcher that runs the shared bash
     // shim through Git Bash (same logic as macOS/Linux), not a separate
@@ -67,6 +71,12 @@ fn docs_define_native_app_monitor_shortcuts() {
     for required in [
         "## Codex App Shortcuts",
         "cdxm-agmsg-foreground.sh",
+        "app-hook enable",
+        "app-hook disable",
+        "--session <thread-id>",
+        "Stop hook",
+        "Codex App Settings",
+        "Waiting for agmsg via codex-monitor",
         "$codex-monitor heartbeat",
         "one-minute heartbeat",
         "automation_update",
@@ -85,6 +95,7 @@ fn docs_define_native_app_monitor_shortcuts() {
         "-RemoveAppBridge",
         "cdxm-codex-app-bridge.exe",
         "enable the app bridge",
+        "Keep the current turn alive by running this helper in the foreground",
     ] {
         assert!(
             !skill.contains(forbidden),
@@ -278,6 +289,7 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("Git Bash"));
     assert!(readme.contains("$codex-monitor heartbeat"));
     assert!(readme.contains("$codex-monitor off"));
+    assert!(readme.contains("Stop hook"));
     assert!(readme.contains("signed native"));
     assert!(readme.contains("codex-monitor update"));
     assert!(readme.contains("single native"));

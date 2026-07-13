@@ -2,6 +2,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CLIENT_INFO_NAME: &str = "codex-monitor";
 pub const CLIENT_INFO_TITLE: &str = "Codex Monitor";
 
+pub mod app_hook;
 pub mod cli;
 pub mod client;
 pub mod delivery;
@@ -28,6 +29,12 @@ pub async fn run_cli() -> anyhow::Result<i32> {
 /// so behavior is consistent across platforms.
 pub fn run_cli_blocking() -> i32 {
     const STACK_SIZE: usize = 16 * 1024 * 1024;
+
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__app-stop-hook")) {
+        if let Err(error) = app_hook::record_stop_hook_entry() {
+            eprintln!("codex-monitor App Stop hook entry probe failed: {error:#}");
+        }
+    }
 
     let run = || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
