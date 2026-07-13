@@ -249,8 +249,13 @@ fn matching_marker(
         bail!("Codex Stop hook turn id must be non-empty");
     }
     let _already_continued = input.stop_hook_active;
-    let Some(marker) = load_marker(paths, &input.session_id)? else {
-        return Ok(None);
+    let marker = match load_marker(paths, &input.session_id) {
+        Ok(Some(marker)) => marker,
+        Ok(None) => return Ok(None),
+        Err(error) => {
+            eprintln!("codex-monitor App Stop hook ignored invalid marker: {error:#}");
+            return Ok(None);
+        }
     };
     let input_cwd = input
         .cwd
@@ -645,6 +650,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(output, json!({ "continue": true }));
+    }
+
+    #[tokio::test]
+    async fn stop_hook_ignores_a_malformed_or_unsupported_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppHookPaths::for_test(temp.path());
+        fs::create_dir_all(&paths.markers_dir).unwrap();
+        let path = paths.markers_dir.join("session-one.json");
+        let helper = temp.path().join("must-not-run.sh");
+        write_helper(&helper, "exit 99");
+        let input = StopHookInput {
+            session_id: "session-one".into(),
+            cwd: temp.path().canonicalize().unwrap(),
+            turn_id: "turn-1".into(),
+            stop_hook_active: false,
+        };
+
+        for raw in ["not-json", r#"{"version":999}"#] {
+            fs::write(&path, raw).unwrap();
+            let output = run_stop_hook_with_paths(&paths, input.clone(), &test_bash(), &helper)
+                .await
+                .unwrap();
+            assert_eq!(output, json!({ "continue": true }));
+        }
     }
 
     #[tokio::test]
