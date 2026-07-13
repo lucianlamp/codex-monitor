@@ -223,7 +223,7 @@ pub async fn run_stop_hook_from_stdio() -> anyhow::Result<i32> {
 struct StopHookInput {
     session_id: String,
     cwd: PathBuf,
-    turn_id: String,
+    #[serde(default)]
     stop_hook_active: bool,
 }
 
@@ -245,9 +245,6 @@ fn matching_marker(
     input: &StopHookInput,
 ) -> anyhow::Result<Option<AppHookMarker>> {
     validate_session_id(&input.session_id)?;
-    if input.turn_id.trim().is_empty() {
-        bail!("Codex Stop hook turn id must be non-empty");
-    }
     let _already_continued = input.stop_hook_active;
     let marker = match load_marker(paths, &input.session_id) {
         Ok(Some(marker)) => marker,
@@ -647,7 +644,6 @@ mod tests {
         let input = StopHookInput {
             session_id: "missing-session".into(),
             cwd: temp.path().canonicalize().unwrap(),
-            turn_id: "turn-1".into(),
             stop_hook_active: false,
         };
 
@@ -672,7 +668,6 @@ mod tests {
         let input = StopHookInput {
             session_id: "session-one".into(),
             cwd: other.path().canonicalize().unwrap(),
-            turn_id: "turn-1".into(),
             stop_hook_active: false,
         };
 
@@ -693,7 +688,6 @@ mod tests {
         let input = StopHookInput {
             session_id: "session-one".into(),
             cwd: temp.path().canonicalize().unwrap(),
-            turn_id: "turn-1".into(),
             stop_hook_active: false,
         };
 
@@ -722,7 +716,6 @@ mod tests {
             let input = StopHookInput {
                 session_id: "session-one".into(),
                 cwd: cwd.clone(),
-                turn_id: "turn-1".into(),
                 stop_hook_active,
             };
             let output = run_stop_hook_with_paths(&paths, input, &test_bash(), &helper)
@@ -747,7 +740,6 @@ mod tests {
         let input = StopHookInput {
             session_id: "session-one".into(),
             cwd,
-            turn_id: "turn-1".into(),
             stop_hook_active: false,
         };
 

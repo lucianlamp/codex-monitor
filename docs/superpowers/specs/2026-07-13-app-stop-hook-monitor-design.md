@@ -70,7 +70,8 @@ hook return success immediately without waiting.
 
 Codex sends the Stop payload as JSON on standard input. The hidden handler:
 
-1. Parses `session_id`, `cwd`, `turn_id`, and `stop_hook_active`.
+1. Parses `session_id`, `cwd`, and `stop_hook_active`, while ignoring unrelated
+   payload fields.
 2. Loads the exact session marker.
 3. Returns `{ "continue": true }` immediately when the marker is absent or the
    cwd does not match.

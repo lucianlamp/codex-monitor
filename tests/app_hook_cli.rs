@@ -94,7 +94,6 @@ fn installed_foreground_helper_accepts_native_owner_pid() {
     let payload = json!({
         "session_id": "native-owner",
         "cwd": cwd,
-        "turn_id": "turn-native-owner",
         "stop_hook_active": false
     });
     let output = stop_hook(binary, root, &helper, &bash_path(), &payload);
