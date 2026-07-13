@@ -43,12 +43,17 @@ The default runs `codex-monitor app-hook enable --team <team> --name <name>
 --session <thread-id> --cwd <cwd>` and verifies it with `app-hook status`. The
 session marker makes each completed turn enter a Stop hook that internally runs
 `cdxm-agmsg-foreground.sh <team> <name>` until a real message arrives. If the
+continuation is interrupted by a new user input, the hook keeps a session-private
+pending delivery and replays it at the next ordinary Stop. It acknowledges and
+clears pending content only after the continuation itself reaches Stop, giving
+at-least-once delivery instead of silently losing an already-read inbox row. If the
 handler is new or changed, open **Codex App Settings > Hooks**, review
 `Waiting for agmsg via codex-monitor`, and choose **Trust**. The `/hooks`
 command is not required; never write hook trust state directly. Heartbeat mode
 upserts one current-thread Codex automation. Off interrupts an active hook wait,
 runs `app-hook disable --session <thread-id>`, and deletes only that task's
-matching heartbeat. All
+matching heartbeat; disabling also clears only that session's pending delivery.
+All
 three use agmsg scripts and leave watcher/process lifecycle untouched.
 
 Native updater:

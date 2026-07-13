@@ -89,7 +89,12 @@ Sender: <sender>
 If a message requires a reply, use the installed agmsg `send.sh`. The marker
 remains active, so the next completed turn enters Stop-hook waiting again.
 `stop_hook_active=true` is expected during these continuations and must not
-disable re-arming.
+disable re-arming. Before returning a continuation, the hook persists its
+formatted messages as a session-private pending delivery. A continuation that
+finishes with `stop_hook_active=true` acknowledges that pending delivery. If a
+user input interrupts the continuation first, the next ordinary Stop must replay
+the same pending delivery without polling `inbox.sh` again. This is at-least-once
+delivery: an ambiguous interruption may repeat a message, but must not lose it.
 
 When `enable` prints `trust-required`, tell the user to open **Codex App
 Settings > Hooks**, review the handler whose status is
@@ -132,6 +137,9 @@ run:
 ```bash
 codex-monitor app-hook disable --session <thread-id>
 ```
+
+Disabling the marker also removes only that session's pending Stop-hook
+delivery.
 
 Resolve the same team/name and target thread, find the matching deterministic
 heartbeat, and delete only that automation with `automation_update`. A missing

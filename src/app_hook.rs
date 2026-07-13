@@ -13,6 +13,7 @@ use tokio::{io::AsyncReadExt, process::Command};
 pub const APP_HOOK_STATUS_MESSAGE: &str = "Waiting for agmsg via codex-monitor";
 const APP_HOOK_TIMEOUT_SECONDS: u64 = 86_400;
 const MARKER_VERSION: u32 = 1;
+const PENDING_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AppHookPaths {
@@ -63,6 +64,13 @@ pub struct AppHookMarker {
     pub name: String,
     pub cwd: PathBuf,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+struct PendingStopHook {
+    version: u32,
+    session_id: String,
+    reason: String,
 }
 
 impl AppHookMarker {
@@ -243,7 +251,7 @@ pub async fn run_stop_hook_from_stdio() -> anyhow::Result<i32> {
         phase = "resolve_helper";
         let helper = foreground_helper_path()?;
         phase = "run_helper";
-        run_active_stop_hook(marker, &bash, &helper).await
+        run_active_stop_hook(&paths, marker, input.stop_hook_active, &bash, &helper).await
     }
     .await;
 
@@ -358,7 +366,7 @@ async fn run_stop_hook_with_paths(
     let Some(marker) = matching_marker(paths, &input)? else {
         return Ok(json!({ "continue": true }));
     };
-    run_active_stop_hook(marker, bash, helper).await
+    run_active_stop_hook(paths, marker, input.stop_hook_active, bash, helper).await
 }
 
 fn matching_marker(
@@ -386,16 +394,32 @@ fn matching_marker(
 }
 
 async fn run_active_stop_hook(
+    paths: &AppHookPaths,
     marker: AppHookMarker,
+    stop_hook_active: bool,
     bash: &Path,
     helper: &Path,
 ) -> anyhow::Result<Value> {
+    if let Some(pending) = load_pending(paths, &marker.session_id)? {
+        clear_raw_pending(paths, &marker.session_id)?;
+        if !stop_hook_active {
+            return Ok(json!({ "decision": "block", "reason": pending.reason }));
+        }
+        clear_pending(paths, &marker.session_id)?;
+    }
+
+    if let Some(reason) = recover_raw_pending(paths, &marker)? {
+        return Ok(json!({ "decision": "block", "reason": reason }));
+    }
+
     let helper_arg = helper_path_for_bash(helper);
+    let raw_pending_arg = helper_path_for_bash(&raw_pending_path(paths, &marker.session_id)?);
     let mut command = Command::new(bash);
     command
         .arg(helper_arg)
         .arg(&marker.team)
         .arg(&marker.name)
+        .arg(raw_pending_arg)
         .kill_on_drop(true);
     #[cfg(not(windows))]
     command.env("CDXM_FOREGROUND_PARENT_PID", std::process::id().to_string());
@@ -417,6 +441,15 @@ async fn run_active_stop_hook(
     let stdout =
         String::from_utf8(output.stdout).context("App foreground helper output was not UTF-8")?;
     let reason = format_inbox_events(&marker.team, &marker.name, &stdout)?;
+    save_pending(
+        paths,
+        &PendingStopHook {
+            version: PENDING_VERSION,
+            session_id: marker.session_id.clone(),
+            reason: reason.clone(),
+        },
+    )?;
+    clear_raw_pending(paths, &marker.session_id)?;
     Ok(json!({ "decision": "block", "reason": reason }))
 }
 
@@ -529,12 +562,15 @@ pub fn load_marker(
 
 pub fn disable_marker(paths: &AppHookPaths, session_id: &str) -> anyhow::Result<bool> {
     let path = marker_path(paths, session_id)?;
-    match fs::remove_file(&path) {
+    let removed = match fs::remove_file(&path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error)
             .with_context(|| format!("failed to remove App hook marker {}", path.display())),
-    }
+    }?;
+    clear_pending(paths, session_id)?;
+    clear_raw_pending(paths, session_id)?;
+    Ok(removed)
 }
 
 fn owned_handler(executable: &Path) -> Value {
@@ -557,6 +593,133 @@ fn is_owned_handler(value: &Value) -> bool {
 fn marker_path(paths: &AppHookPaths, session_id: &str) -> anyhow::Result<PathBuf> {
     validate_session_id(session_id)?;
     Ok(paths.markers_dir.join(format!("{session_id}.json")))
+}
+
+fn pending_path(paths: &AppHookPaths, session_id: &str) -> anyhow::Result<PathBuf> {
+    validate_session_id(session_id)?;
+    Ok(paths.markers_dir.join(format!("{session_id}.pending.json")))
+}
+
+fn raw_pending_path(paths: &AppHookPaths, session_id: &str) -> anyhow::Result<PathBuf> {
+    validate_session_id(session_id)?;
+    Ok(paths.markers_dir.join(format!("{session_id}.pending.raw")))
+}
+
+fn recover_raw_pending(
+    paths: &AppHookPaths,
+    marker: &AppHookMarker,
+) -> anyhow::Result<Option<String>> {
+    let path = raw_pending_path(paths, &marker.session_id)?;
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to read App hook raw pending delivery {}",
+                    path.display()
+                )
+            })
+        }
+    };
+    let normalized = raw.replace('\r', "");
+    if normalized.trim().is_empty() || normalized.trim() == "No new messages." {
+        clear_raw_pending(paths, &marker.session_id)?;
+        return Ok(None);
+    }
+
+    let reason = format_inbox_events(&marker.team, &marker.name, &raw).with_context(|| {
+        format!(
+            "App hook raw pending delivery could not be recovered: {}",
+            path.display()
+        )
+    })?;
+    save_pending(
+        paths,
+        &PendingStopHook {
+            version: PENDING_VERSION,
+            session_id: marker.session_id.clone(),
+            reason: reason.clone(),
+        },
+    )?;
+    clear_raw_pending(paths, &marker.session_id)?;
+    Ok(Some(reason))
+}
+
+fn save_pending(paths: &AppHookPaths, pending: &PendingStopHook) -> anyhow::Result<()> {
+    validate_pending(pending)?;
+    let encoded =
+        serde_json::to_vec_pretty(pending).context("failed to encode App hook pending delivery")?;
+    atomic_write_private(&pending_path(paths, &pending.session_id)?, &encoded)
+}
+
+fn load_pending(paths: &AppHookPaths, session_id: &str) -> anyhow::Result<Option<PendingStopHook>> {
+    let path = pending_path(paths, session_id)?;
+    let raw = match fs::read(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to read App hook pending delivery {}",
+                    path.display()
+                )
+            })
+        }
+    };
+    let pending: PendingStopHook = serde_json::from_slice(&raw).with_context(|| {
+        format!(
+            "App hook pending delivery is not valid JSON: {}",
+            path.display()
+        )
+    })?;
+    validate_pending(&pending)?;
+    if pending.session_id != session_id {
+        bail!("App hook pending delivery session id does not match its filename");
+    }
+    Ok(Some(pending))
+}
+
+fn clear_pending(paths: &AppHookPaths, session_id: &str) -> anyhow::Result<bool> {
+    let path = pending_path(paths, session_id)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove App hook pending delivery {}",
+                path.display()
+            )
+        }),
+    }
+}
+
+fn clear_raw_pending(paths: &AppHookPaths, session_id: &str) -> anyhow::Result<bool> {
+    let path = raw_pending_path(paths, session_id)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove App hook raw pending delivery {}",
+                path.display()
+            )
+        }),
+    }
+}
+
+fn validate_pending(pending: &PendingStopHook) -> anyhow::Result<()> {
+    if pending.version != PENDING_VERSION {
+        bail!(
+            "unsupported App hook pending delivery version: {}",
+            pending.version
+        );
+    }
+    validate_session_id(&pending.session_id)?;
+    if pending.reason.is_empty() {
+        bail!("App hook pending delivery reason must not be empty");
+    }
+    Ok(())
 }
 
 fn validate_marker(marker: &AppHookMarker) -> anyhow::Result<()> {
@@ -598,6 +761,37 @@ fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     let temporary = parent.join(format!(".codex-monitor-{}-{nanos}.tmp", std::process::id()));
     fs::write(&temporary, contents)
         .with_context(|| format!("failed to write temporary file {}", temporary.display()))?;
+    if let Err(error) = publish_atomic(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("failed to publish {}", path.display()));
+    }
+    Ok(())
+}
+
+fn atomic_write_private(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .with_context(|| format!("path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create directory {}", parent.display()))?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_nanos();
+    let temporary = parent.join(format!(".codex-monitor-{}-{nanos}.tmp", std::process::id()));
+    fs::write(&temporary, contents)
+        .with_context(|| format!("failed to write temporary file {}", temporary.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600)).with_context(|| {
+            format!(
+                "failed to restrict temporary file permissions {}",
+                temporary.display()
+            )
+        })?;
+    }
     if let Err(error) = publish_atomic(&temporary, path) {
         let _ = fs::remove_file(&temporary);
         return Err(error).with_context(|| format!("failed to publish {}", path.display()));
@@ -649,6 +843,20 @@ mod tests {
 
     fn write_helper(path: &Path, body: &str) {
         fs::write(path, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+    }
+
+    fn write_counting_helper(path: &Path) {
+        write_helper(
+            path,
+            r#"count_file="$(dirname "$0")/helper-count"
+count=0
+if [[ -f "$count_file" ]]; then
+  count="$(<"$count_file")"
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+printf '1 new message(s):\n\n  [now] alice: message-%s\n\n' "$count""#,
+        );
     }
 
     fn marker(session_id: &str, cwd: &Path) -> AppHookMarker {
@@ -750,9 +958,25 @@ mod tests {
 
         enable_marker(&paths, &first).unwrap();
         enable_marker(&paths, &second).unwrap();
+        save_pending(
+            &paths,
+            &PendingStopHook {
+                version: PENDING_VERSION,
+                session_id: "session-one".into(),
+                reason: "pending message".into(),
+            },
+        )
+        .unwrap();
+        fs::write(
+            paths.markers_dir.join("session-one.pending.raw"),
+            "raw pending message",
+        )
+        .unwrap();
         assert_eq!(load_marker(&paths, "session-one").unwrap(), Some(first));
         assert!(disable_marker(&paths, "session-one").unwrap());
         assert_eq!(load_marker(&paths, "session-one").unwrap(), None);
+        assert_eq!(load_pending(&paths, "session-one").unwrap(), None);
+        assert!(!paths.markers_dir.join("session-one.pending.raw").exists());
         assert_eq!(load_marker(&paths, "session-two").unwrap(), Some(second));
         assert!(!disable_marker(&paths, "session-one").unwrap());
     }
@@ -861,6 +1085,114 @@ mod tests {
             assert!(reason.contains("Sender: bob\n\nsecond\nline"));
             assert!(reason.contains("use the agmsg scripts"));
         }
+    }
+
+    #[tokio::test]
+    async fn stop_hook_replays_pending_after_interrupted_continuation() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppHookPaths::for_test(temp.path());
+        let cwd = temp.path().canonicalize().unwrap();
+        enable_marker(&paths, &marker("session-one", &cwd)).unwrap();
+        let helper = temp.path().join("counting-messages.sh");
+        write_counting_helper(&helper);
+        let input = StopHookInput {
+            session_id: "session-one".into(),
+            cwd,
+            stop_hook_active: false,
+        };
+
+        let first = run_stop_hook_with_paths(&paths, input.clone(), &test_bash(), &helper)
+            .await
+            .unwrap();
+        let replay = run_stop_hook_with_paths(&paths, input, &test_bash(), &helper)
+            .await
+            .unwrap();
+
+        assert_eq!(replay, first);
+        assert!(first["reason"].as_str().unwrap().contains("message-1"));
+        assert_eq!(
+            fs::read_to_string(temp.path().join("helper-count")).unwrap(),
+            "1"
+        );
+        assert!(paths.markers_dir.join("session-one.pending.json").is_file());
+    }
+
+    #[tokio::test]
+    async fn stop_hook_recovers_raw_message_saved_before_inbox_marks_it_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppHookPaths::for_test(temp.path());
+        let cwd = temp.path().canonicalize().unwrap();
+        enable_marker(&paths, &marker("session-one", &cwd)).unwrap();
+        fs::write(
+            paths.markers_dir.join("session-one.pending.raw"),
+            "1 new message(s):\n\n  [now] alice: survived interruption\n\n",
+        )
+        .unwrap();
+        let helper = temp.path().join("must-not-run.sh");
+        write_helper(&helper, "exit 99");
+
+        let result = run_stop_hook_with_paths(
+            &paths,
+            StopHookInput {
+                session_id: "session-one".into(),
+                cwd,
+                stop_hook_active: false,
+            },
+            &test_bash(),
+            &helper,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["decision"], "block");
+        assert!(result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("survived interruption"));
+        assert!(!paths.markers_dir.join("session-one.pending.raw").exists());
+    }
+
+    #[tokio::test]
+    async fn stop_hook_acknowledges_pending_only_after_continuation_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppHookPaths::for_test(temp.path());
+        let cwd = temp.path().canonicalize().unwrap();
+        enable_marker(&paths, &marker("session-one", &cwd)).unwrap();
+        let helper = temp.path().join("counting-messages.sh");
+        write_counting_helper(&helper);
+
+        let first = run_stop_hook_with_paths(
+            &paths,
+            StopHookInput {
+                session_id: "session-one".into(),
+                cwd: cwd.clone(),
+                stop_hook_active: false,
+            },
+            &test_bash(),
+            &helper,
+        )
+        .await
+        .unwrap();
+        assert!(first["reason"].as_str().unwrap().contains("message-1"));
+
+        let next = run_stop_hook_with_paths(
+            &paths,
+            StopHookInput {
+                session_id: "session-one".into(),
+                cwd,
+                stop_hook_active: true,
+            },
+            &test_bash(),
+            &helper,
+        )
+        .await
+        .unwrap();
+
+        assert!(next["reason"].as_str().unwrap().contains("message-2"));
+        assert_eq!(
+            fs::read_to_string(temp.path().join("helper-count")).unwrap(),
+            "2"
+        );
     }
 
     #[tokio::test]
