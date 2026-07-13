@@ -29,6 +29,8 @@ fn foreground_helper_contract() {
     assert!(helper.contains("No new messages."));
     assert!(helper.contains("while :"));
     assert!(helper.contains("exit 0"));
+    assert!(helper.contains("CDXM_FOREGROUND_PARENT_PID"));
+    assert!(helper.contains("kill -0 \"$owner_pid\""));
     for forbidden in ["nohup", "pidfile", "monitor watch", "launch-agent"] {
         assert!(
             !helper.contains(forbidden),

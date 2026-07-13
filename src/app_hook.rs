@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::{io::AsyncReadExt, process::Command};
 
 pub const APP_HOOK_STATUS_MESSAGE: &str = "Waiting for agmsg via codex-monitor";
 const APP_HOOK_TIMEOUT_SECONDS: u64 = 86_400;
@@ -192,7 +193,157 @@ pub fn hook_is_installed(paths: &AppHookPaths) -> anyhow::Result<bool> {
 }
 
 pub async fn run_stop_hook_from_stdio() -> anyhow::Result<i32> {
-    bail!("App Stop hook execution is not implemented")
+    let mut raw = String::new();
+    tokio::io::stdin()
+        .read_to_string(&mut raw)
+        .await
+        .context("failed to read Codex Stop hook input")?;
+    let input: StopHookInput =
+        serde_json::from_str(&raw).context("Codex Stop hook input is not valid JSON")?;
+    let paths = default_paths()?;
+    let bash = resolve_bash()?;
+    let helper = foreground_helper_path()?;
+    let output = run_stop_hook_with_paths(&paths, input, &bash, &helper).await?;
+    println!(
+        "{}",
+        serde_json::to_string(&output).context("failed to encode Stop hook output")?
+    );
+    Ok(0)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StopHookInput {
+    session_id: String,
+    cwd: PathBuf,
+    turn_id: String,
+    stop_hook_active: bool,
+}
+
+async fn run_stop_hook_with_paths(
+    paths: &AppHookPaths,
+    input: StopHookInput,
+    bash: &Path,
+    helper: &Path,
+) -> anyhow::Result<Value> {
+    validate_session_id(&input.session_id)?;
+    if input.turn_id.trim().is_empty() {
+        bail!("Codex Stop hook turn id must be non-empty");
+    }
+    let _already_continued = input.stop_hook_active;
+    let Some(marker) = load_marker(paths, &input.session_id)? else {
+        return Ok(json!({ "continue": true }));
+    };
+    let input_cwd = input.cwd.canonicalize().unwrap_or(input.cwd);
+    if input_cwd != marker.cwd {
+        return Ok(json!({ "continue": true }));
+    }
+
+    let helper_arg = helper_path_for_bash(helper);
+    let mut command = Command::new(bash);
+    command
+        .arg(helper_arg)
+        .arg(&marker.team)
+        .arg(&marker.name)
+        .env("CDXM_FOREGROUND_PARENT_PID", std::process::id().to_string())
+        .kill_on_drop(true);
+    let output = command.output().await.with_context(|| {
+        format!(
+            "failed to run App foreground helper {} through {}",
+            helper.display(),
+            bash.display()
+        )
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        bail!(
+            "App foreground helper failed with {}: {}",
+            output.status,
+            stderr
+        );
+    }
+    let stdout =
+        String::from_utf8(output.stdout).context("App foreground helper output was not UTF-8")?;
+    let reason = format_inbox_events(&marker.team, &marker.name, &stdout)?;
+    Ok(json!({ "decision": "block", "reason": reason }))
+}
+
+fn format_inbox_events(team: &str, name: &str, output: &str) -> anyhow::Result<String> {
+    let mut events = Vec::new();
+    for line in output.replace('\r', "").lines() {
+        let line = line.trim();
+        if !line.starts_with('[') {
+            continue;
+        }
+        let (_, payload) = line
+            .split_once("] ")
+            .context("agmsg inbox row is missing its timestamp delimiter")?;
+        let (sender, body) = payload
+            .split_once(": ")
+            .context("agmsg inbox row is missing its sender delimiter")?;
+        let body = body.replace("\\n", "\n").replace("\\t", "\t");
+        events.push(format!(
+            "agmsg monitor event\n\nTeam: {team}\nRecipient: {name}\nSender: {sender}\n\n{body}\n\nIf this requires a reply, use the agmsg scripts rather than answering only in chat."
+        ));
+    }
+    if events.is_empty() {
+        bail!("App foreground helper returned no parseable agmsg messages");
+    }
+    Ok(events.join("\n\n"))
+}
+
+fn foreground_helper_path() -> anyhow::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("CDXM_APP_HOOK_FOREGROUND_HELPER") {
+        return Ok(PathBuf::from(path));
+    }
+    let base = BaseDirs::new().context("could not resolve the user home directory")?;
+    Ok(base
+        .home_dir()
+        .join(".codex/skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh"))
+}
+
+fn resolve_bash() -> anyhow::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("CDXM_BASH") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Ok(path);
+        }
+        bail!("CDXM_BASH is not an executable file: {}", path.display());
+    }
+
+    #[cfg(windows)]
+    {
+        let mut candidates = vec![
+            PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"),
+            PathBuf::from(r"C:\Program Files\Git\usr\bin\bash.exe"),
+        ];
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(local_app_data).join("Programs/Git/bin/bash.exe"));
+        }
+        if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+            return Ok(path);
+        }
+        bail!("Git Bash is required for the Codex App Stop hook");
+    }
+
+    #[cfg(not(windows))]
+    {
+        let path = PathBuf::from("/bin/bash");
+        if path.is_file() {
+            return Ok(path);
+        }
+        bail!("/bin/bash is required for the Codex App Stop hook");
+    }
+}
+
+fn helper_path_for_bash(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        path.to_string_lossy().replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().into_owned()
+    }
 }
 
 pub fn enable_marker(paths: &AppHookPaths, marker: &AppHookMarker) -> anyhow::Result<()> {
@@ -313,6 +464,10 @@ mod tests {
     use serde_json::Value;
     use std::{fs, path::Path};
 
+    fn write_helper(path: &Path, body: &str) {
+        fs::write(path, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+    }
+
     fn marker(session_id: &str, cwd: &Path) -> AppHookMarker {
         AppHookMarker {
             version: 1,
@@ -416,6 +571,120 @@ mod tests {
         for session_id in ["", "../escape", "with/slash", "with\\slash"] {
             assert!(enable_marker(&paths, &marker(session_id, &cwd)).is_err());
             assert!(load_marker(&paths, session_id).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_hook_without_marker_returns_immediately() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppHookPaths::for_test(temp.path());
+        let helper = temp.path().join("must-not-run.sh");
+        write_helper(&helper, "exit 99");
+        let input = StopHookInput {
+            session_id: "missing-session".into(),
+            cwd: temp.path().canonicalize().unwrap(),
+            turn_id: "turn-1".into(),
+            stop_hook_active: false,
+        };
+
+        let output = run_stop_hook_with_paths(&paths, input, &test_bash(), &helper)
+            .await
+            .unwrap();
+        assert_eq!(output, json!({ "continue": true }));
+    }
+
+    #[tokio::test]
+    async fn stop_hook_cwd_mismatch_does_not_run_helper() {
+        let temp = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let paths = AppHookPaths::for_test(temp.path());
+        enable_marker(
+            &paths,
+            &marker("session-one", &temp.path().canonicalize().unwrap()),
+        )
+        .unwrap();
+        let helper = temp.path().join("must-not-run.sh");
+        write_helper(&helper, "exit 99");
+        let input = StopHookInput {
+            session_id: "session-one".into(),
+            cwd: other.path().canonicalize().unwrap(),
+            turn_id: "turn-1".into(),
+            stop_hook_active: false,
+        };
+
+        let output = run_stop_hook_with_paths(&paths, input, &test_bash(), &helper)
+            .await
+            .unwrap();
+        assert_eq!(output, json!({ "continue": true }));
+    }
+
+    #[tokio::test]
+    async fn stop_hook_formats_messages_and_rearms_after_continuation() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppHookPaths::for_test(temp.path());
+        let cwd = temp.path().canonicalize().unwrap();
+        enable_marker(&paths, &marker("session-one", &cwd)).unwrap();
+        let helper = temp.path().join("messages.sh");
+        write_helper(
+            &helper,
+            "printf '2 new message(s):\\n\\n  [now] alice: first\\n  [later] bob: second\\\\nline\\n\\n'",
+        );
+
+        for stop_hook_active in [false, true] {
+            let input = StopHookInput {
+                session_id: "session-one".into(),
+                cwd: cwd.clone(),
+                turn_id: "turn-1".into(),
+                stop_hook_active,
+            };
+            let output = run_stop_hook_with_paths(&paths, input, &test_bash(), &helper)
+                .await
+                .unwrap();
+            assert_eq!(output["decision"], "block");
+            let reason = output["reason"].as_str().unwrap();
+            assert!(reason.contains("Sender: alice\n\nfirst"));
+            assert!(reason.contains("Sender: bob\n\nsecond\nline"));
+            assert!(reason.contains("use the agmsg scripts"));
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_hook_propagates_helper_failure_without_json() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppHookPaths::for_test(temp.path());
+        let cwd = temp.path().canonicalize().unwrap();
+        enable_marker(&paths, &marker("session-one", &cwd)).unwrap();
+        let helper = temp.path().join("failure.sh");
+        write_helper(&helper, "printf 'helper failed' >&2; exit 23");
+        let input = StopHookInput {
+            session_id: "session-one".into(),
+            cwd,
+            turn_id: "turn-1".into(),
+            stop_hook_active: false,
+        };
+
+        let error = run_stop_hook_with_paths(&paths, input, &test_bash(), &helper)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("helper failed"));
+    }
+
+    fn test_bash() -> PathBuf {
+        #[cfg(windows)]
+        {
+            for candidate in [
+                r"C:\Program Files\Git\bin\bash.exe",
+                r"C:\Program Files\Git\usr\bin\bash.exe",
+            ] {
+                if Path::new(candidate).is_file() {
+                    return PathBuf::from(candidate);
+                }
+            }
+            panic!("Git Bash is required for App hook tests");
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from("/bin/bash")
         }
     }
 }
