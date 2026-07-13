@@ -19,6 +19,7 @@ pub struct AppHookPaths {
     pub hooks_json: PathBuf,
     pub markers_dir: PathBuf,
     pub fallback_diagnostic_json: PathBuf,
+    pub entry_json: PathBuf,
 }
 
 impl AppHookPaths {
@@ -27,6 +28,7 @@ impl AppHookPaths {
             hooks_json: root.join(".codex/hooks.json"),
             markers_dir: root.join(".codex-monitor/app-hooks"),
             fallback_diagnostic_json: root.join(".codex-monitor/app-hook-last-error.json"),
+            entry_json: root.join(".codex-monitor/app-hook-last-entry.json"),
         }
     }
 
@@ -93,6 +95,27 @@ pub fn default_paths() -> anyhow::Result<AppHookPaths> {
     }
     let base = BaseDirs::new().context("could not resolve the user home directory")?;
     Ok(AppHookPaths::from_root(base.home_dir()))
+}
+
+pub fn record_stop_hook_entry() -> anyhow::Result<()> {
+    let paths = default_paths()?;
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs();
+    let executable = std::env::current_exe()
+        .ok()
+        .map(|path| path.display().to_string());
+    let entry = json!({
+        "version": 1,
+        "pid": std::process::id(),
+        "started_at": started_at,
+        "argv1": "__app-stop-hook",
+        "executable": executable,
+    });
+    let encoded =
+        serde_json::to_vec_pretty(&entry).context("failed to encode App hook entry probe")?;
+    atomic_write(&paths.entry_json, &encoded)
 }
 
 pub fn ensure_hook_installed(

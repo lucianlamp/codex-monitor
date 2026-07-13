@@ -96,6 +96,25 @@ fn app_hook_failure_writes_redacted_diagnostic() {
 }
 
 #[test]
+fn app_hook_records_entry_before_cli_validation() {
+    let binary = env!("CARGO_BIN_EXE_codex-monitor");
+    let temp = tempfile::tempdir().unwrap();
+
+    let output = Command::new(binary)
+        .args(["__app-stop-hook", "--unexpected"])
+        .env("CDXM_APP_HOOK_ROOT", temp.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+
+    let entry_path = temp.path().join(".codex-monitor/app-hook-last-entry.json");
+    let entry: Value = serde_json::from_slice(&fs::read(entry_path).unwrap()).unwrap();
+    assert_eq!(entry["version"], 1);
+    assert_eq!(entry["argv1"], "__app-stop-hook");
+    assert!(entry["pid"].as_u64().is_some());
+}
+
+#[test]
 fn installed_foreground_helper_accepts_native_owner_pid() {
     let binary = env!("CARGO_BIN_EXE_codex-monitor");
     let temp = tempfile::tempdir().unwrap();
