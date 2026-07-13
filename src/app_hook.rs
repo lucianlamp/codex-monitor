@@ -3,6 +3,7 @@ use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -17,6 +18,7 @@ const MARKER_VERSION: u32 = 1;
 pub struct AppHookPaths {
     pub hooks_json: PathBuf,
     pub markers_dir: PathBuf,
+    pub fallback_diagnostic_json: PathBuf,
 }
 
 impl AppHookPaths {
@@ -24,6 +26,7 @@ impl AppHookPaths {
         Self {
             hooks_json: root.join(".codex/hooks.json"),
             markers_dir: root.join(".codex-monitor/app-hooks"),
+            fallback_diagnostic_json: root.join(".codex-monitor/app-hook-last-error.json"),
         }
     }
 
@@ -197,21 +200,45 @@ pub fn hook_is_installed(paths: &AppHookPaths) -> anyhow::Result<bool> {
 }
 
 pub async fn run_stop_hook_from_stdio() -> anyhow::Result<i32> {
-    let mut raw = String::new();
-    tokio::io::stdin()
-        .read_to_string(&mut raw)
-        .await
-        .context("failed to read Codex Stop hook input")?;
-    let input: StopHookInput =
-        serde_json::from_str(&raw).context("Codex Stop hook input is not valid JSON")?;
     let paths = default_paths()?;
-    let Some(marker) = matching_marker(&paths, &input)? else {
-        println!("{}", json!({ "continue": true }));
-        return Ok(0);
+    let mut raw = String::new();
+    let mut phase = "read_stdin";
+    let result: anyhow::Result<Value> = async {
+        tokio::io::stdin()
+            .read_to_string(&mut raw)
+            .await
+            .context("failed to read Codex Stop hook input")?;
+        phase = "parse_input";
+        let input: StopHookInput =
+            serde_json::from_str(&raw).context("Codex Stop hook input is not valid JSON")?;
+        phase = "match_marker";
+        let Some(marker) = matching_marker(&paths, &input)? else {
+            return Ok(json!({ "continue": true }));
+        };
+        phase = "resolve_bash";
+        let bash = resolve_bash()?;
+        phase = "resolve_helper";
+        let helper = foreground_helper_path()?;
+        phase = "run_helper";
+        run_active_stop_hook(marker, &bash, &helper).await
+    }
+    .await;
+
+    let output = match result {
+        Ok(output) => {
+            clear_stop_hook_diagnostic(&paths, &raw);
+            output
+        }
+        Err(error) => {
+            if let Err(diagnostic_error) = write_stop_hook_diagnostic(&paths, phase, &raw, &error) {
+                eprintln!(
+                    "codex-monitor App Stop hook could not write diagnostics: {diagnostic_error:#}"
+                );
+            }
+            return Err(error);
+        }
     };
-    let bash = resolve_bash()?;
-    let helper = foreground_helper_path()?;
-    let output = run_active_stop_hook(marker, &bash, &helper).await?;
+
     println!(
         "{}",
         serde_json::to_string(&output).context("failed to encode Stop hook output")?
@@ -225,6 +252,77 @@ struct StopHookInput {
     cwd: PathBuf,
     #[serde(default)]
     stop_hook_active: bool,
+}
+
+fn write_stop_hook_diagnostic(
+    paths: &AppHookPaths,
+    phase: &str,
+    raw: &str,
+    error: &anyhow::Error,
+) -> anyhow::Result<()> {
+    let diagnostic = json!({
+        "version": 1,
+        "phase": phase,
+        "error": bounded_error(error),
+        "input_shape": top_level_input_shape(raw),
+    });
+    let encoded =
+        serde_json::to_vec_pretty(&diagnostic).context("failed to encode App hook diagnostic")?;
+    atomic_write(&stop_hook_diagnostic_path(paths, raw), &encoded)
+}
+
+fn clear_stop_hook_diagnostic(paths: &AppHookPaths, raw: &str) {
+    for path in [
+        stop_hook_diagnostic_path(paths, raw),
+        paths.fallback_diagnostic_json.clone(),
+    ] {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => eprintln!(
+                "codex-monitor App Stop hook could not clear stale diagnostic {}: {error}",
+                path.display()
+            ),
+        }
+    }
+}
+
+fn stop_hook_diagnostic_path(paths: &AppHookPaths, raw: &str) -> PathBuf {
+    let session_id = serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|value| value.get("session_id")?.as_str().map(str::to_owned));
+    match session_id {
+        Some(session_id) if validate_session_id(&session_id).is_ok() => paths
+            .markers_dir
+            .join(format!("{session_id}.last-error.json")),
+        _ => paths.fallback_diagnostic_json.clone(),
+    }
+}
+
+fn top_level_input_shape(raw: &str) -> BTreeMap<String, String> {
+    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(raw) else {
+        return BTreeMap::new();
+    };
+    object
+        .into_iter()
+        .map(|(key, value)| (key, json_type(&value).to_owned()))
+        .collect()
+}
+
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn bounded_error(error: &anyhow::Error) -> String {
+    const MAX_ERROR_CHARS: usize = 2_048;
+    format!("{error:#}").chars().take(MAX_ERROR_CHARS).collect()
 }
 
 #[cfg(test)]

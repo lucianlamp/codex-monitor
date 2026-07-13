@@ -36,6 +36,16 @@ fn stop_hook(
     bash: &Path,
     payload: &Value,
 ) -> std::process::Output {
+    stop_hook_raw(binary, root, helper, bash, &payload.to_string())
+}
+
+fn stop_hook_raw(
+    binary: &str,
+    root: &Path,
+    helper: &Path,
+    bash: &Path,
+    payload: &str,
+) -> std::process::Output {
     let mut command = Command::new(binary);
     command
         .arg("__app-stop-hook")
@@ -54,9 +64,35 @@ fn stop_hook(
         .stdin
         .take()
         .unwrap()
-        .write_all(payload.to_string().as_bytes())
+        .write_all(payload.as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn app_hook_failure_writes_redacted_diagnostic() {
+    let binary = env!("CARGO_BIN_EXE_codex-monitor");
+    let temp = tempfile::tempdir().unwrap();
+    let secret = "do-not-record-this-assistant-message";
+    let payload = format!(
+        r#"{{"session_id":42,"cwd":"C:/workspace","stop_hook_active":false,"last_assistant_message":"{secret}"}}"#
+    );
+
+    let output = stop_hook_raw(
+        binary,
+        temp.path(),
+        Path::new("unused-helper"),
+        Path::new("unused-bash"),
+        &payload,
+    );
+    assert!(!output.status.success());
+
+    let diagnostic_path = temp.path().join(".codex-monitor/app-hook-last-error.json");
+    let diagnostic = fs::read_to_string(&diagnostic_path).unwrap();
+    assert!(diagnostic.contains(r#""phase": "parse_input""#));
+    assert!(diagnostic.contains(r#""session_id": "number""#));
+    assert!(diagnostic.contains(r#""last_assistant_message": "string""#));
+    assert!(!diagnostic.contains(secret));
 }
 
 #[test]
