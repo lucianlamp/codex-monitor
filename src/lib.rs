@@ -2,6 +2,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CLIENT_INFO_NAME: &str = "codex-monitor";
 pub const CLIENT_INFO_TITLE: &str = "Codex Monitor";
 
+pub mod app_hook;
 pub mod cli;
 pub mod client;
 pub mod delivery;
