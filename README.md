@@ -109,21 +109,25 @@ executable; do not use an external App launcher. In Codex App, the installed
 skill provides three explicit receive modes:
 
 ```text
-$codex-monitor            keep the current turn alive and wait locally
+$codex-monitor            arm a session Stop hook after every completed turn
 $codex-monitor heartbeat  create or update a one-minute App heartbeat
-$codex-monitor off        stop foreground wait and remove this task's heartbeat
+$codex-monitor off        disable this session's Stop hook and heartbeat
 ```
 
-The default foreground helper calls the installed agmsg `inbox.sh` repeatedly
-inside one blocking tool call. Empty polls stay local and do not start model
-turns. Heartbeat mode is opt-in for delivery after the current turn completes.
+The default mode installs one dormant global Stop hook and enables it with a
+marker scoped to the current App session. After every completed turn, its
+internal foreground helper calls the installed agmsg `inbox.sh` until a message
+arrives. Empty polls stay local and do not start model turns; a real message is
+returned as a Stop continuation prompt and the marker automatically re-arms for
+the next completed turn. The first hook definition or a changed definition must
+be reviewed once through `/hooks`. Heartbeat mode remains an explicit fallback.
 Neither mode starts a watcher or changes the App executable.
 
 In Codex CLI, `$codex-monitor` has different semantics: it runs
 `cdxm-agmsg-apply.sh` and applies a durable receiver for the current session.
 On Windows that receiver is a detached background `monitor watch`; on macOS it
-is a loaded LaunchAgent. The App-only foreground inbox helper must not be used
-for the CLI shortcut.
+is a loaded LaunchAgent. The App-only Stop hook and foreground inbox helper must
+not be used for the CLI shortcut.
 
 Run updates from any directory on Windows or macOS:
 
@@ -315,7 +319,7 @@ $HOME/.codex/app-server-control/app-server-control.sock
 ```
 
 On Windows, `--target app` returns an error directing App delivery to
-`$codex-monitor` foreground wait or `$codex-monitor heartbeat`. Native App does
+`$codex-monitor` Stop hook wait or `$codex-monitor heartbeat`. Native App does
 not expose a safe external injection endpoint. Explicit and CLI-managed
 endpoints remain available.
 

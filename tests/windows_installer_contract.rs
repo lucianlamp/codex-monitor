@@ -69,6 +69,11 @@ fn docs_define_native_app_monitor_shortcuts() {
     for required in [
         "## Codex App Shortcuts",
         "cdxm-agmsg-foreground.sh",
+        "app-hook enable",
+        "app-hook disable",
+        "--session <thread-id>",
+        "Stop hook",
+        "/hooks",
         "$codex-monitor heartbeat",
         "one-minute heartbeat",
         "automation_update",
@@ -87,6 +92,7 @@ fn docs_define_native_app_monitor_shortcuts() {
         "-RemoveAppBridge",
         "cdxm-codex-app-bridge.exe",
         "enable the app bridge",
+        "Keep the current turn alive by running this helper in the foreground",
     ] {
         assert!(
             !skill.contains(forbidden),
@@ -280,6 +286,7 @@ fn readme_documents_windows_native_install() {
     assert!(readme.contains("Git Bash"));
     assert!(readme.contains("$codex-monitor heartbeat"));
     assert!(readme.contains("$codex-monitor off"));
+    assert!(readme.contains("Stop hook"));
     assert!(readme.contains("signed native"));
     assert!(readme.contains("codex-monitor update"));
     assert!(readme.contains("single native"));

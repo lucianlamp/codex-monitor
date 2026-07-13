@@ -39,10 +39,15 @@ $codex-monitor heartbeat
 $codex-monitor off
 ```
 
-The default runs `cdxm-agmsg-foreground.sh <team> <name>` inside the current
-turn. Heartbeat mode upserts one current-thread Codex automation. Off cancels
-the foreground wait and deletes only that task's matching heartbeat. All three
-use agmsg scripts and leave watcher/process lifecycle untouched.
+The default runs `codex-monitor app-hook enable --team <team> --name <name>
+--session <thread-id> --cwd <cwd>` and verifies it with `app-hook status`. The
+session marker makes each completed turn enter a Stop hook that internally runs
+`cdxm-agmsg-foreground.sh <team> <name>` until a real message arrives. If the
+handler is new or changed, review it once through `/hooks`; never write hook
+trust state directly. Heartbeat mode upserts one current-thread Codex
+automation. Off interrupts an active hook wait, runs `app-hook disable
+--session <thread-id>`, and deletes only that task's matching heartbeat. All
+three use agmsg scripts and leave watcher/process lifecycle untouched.
 
 Native updater:
 
