@@ -524,7 +524,7 @@ fn run_app_hook_command(command: AppHookCommand) -> anyhow::Result<i32> {
                 marker.cwd.display()
             );
             if change != crate::app_hook::HookChange::Unchanged {
-                println!("app-hook\ttrust-required\taction=/hooks");
+                println!("app-hook\ttrust-required\taction=codex-app-settings-hooks");
             }
             Ok(0)
         }

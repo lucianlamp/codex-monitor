@@ -226,7 +226,10 @@ fn app_hook_cli_enables_continues_rearms_and_disables() {
         "stderr: {}",
         String::from_utf8_lossy(&enable.stderr)
     );
-    assert!(String::from_utf8_lossy(&enable.stdout).contains("trust-required"));
+    let enable_stdout = String::from_utf8_lossy(&enable.stdout);
+    assert!(enable_stdout.contains("trust-required"));
+    assert!(enable_stdout.contains("action=codex-app-settings-hooks"));
+    assert!(!enable_stdout.contains("action=/hooks"));
     let hooks: Value = serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
     let hooks_text = hooks.to_string();
     assert!(hooks_text.contains("other"));
