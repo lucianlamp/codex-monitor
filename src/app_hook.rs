@@ -478,18 +478,47 @@ fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     let temporary = parent.join(format!(".codex-monitor-{}-{nanos}.tmp", std::process::id()));
     fs::write(&temporary, contents)
         .with_context(|| format!("failed to write temporary file {}", temporary.display()))?;
-    if let Err(error) = fs::rename(&temporary, path) {
-        if path.exists() {
-            fs::remove_file(path)
-                .with_context(|| format!("failed to replace {}", path.display()))?;
-            fs::rename(&temporary, path)
-                .with_context(|| format!("failed to publish {}", path.display()))?;
-        } else {
-            let _ = fs::remove_file(&temporary);
-            return Err(error).with_context(|| format!("failed to publish {}", path.display()));
-        }
+    if let Err(error) = publish_atomic(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("failed to publish {}", path.display()));
     }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn publish_atomic(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(temporary, destination)
+}
+
+#[cfg(windows)]
+fn publish_atomic(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::{iter, os::windows::ffi::OsStrExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let temporary: Vec<u16> = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            temporary.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
