@@ -90,8 +90,10 @@ fn app_hook_commands_are_public_and_handler_is_hidden() {
         );
     }
 
+    let hook_root = tempfile::tempdir().unwrap();
     let hidden = Command::new(primary)
         .args(["__app-stop-hook", "--help"])
+        .env("CDXM_APP_HOOK_ROOT", hook_root.path())
         .output()
         .unwrap();
     assert!(hidden.status.success());
