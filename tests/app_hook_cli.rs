@@ -29,6 +29,18 @@ fn bash_path() -> PathBuf {
     }
 }
 
+fn write_executable(path: &Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+}
+
 fn stop_hook(
     binary: &str,
     root: &Path,
@@ -166,11 +178,10 @@ fn installed_foreground_helper_accepts_native_owner_pid() {
 
     let scripts = root.join("agmsg-scripts");
     fs::create_dir_all(&scripts).unwrap();
-    fs::write(
-        scripts.join("inbox.sh"),
+    write_executable(
+        &scripts.join("inbox.sh"),
         "#!/usr/bin/env bash\nprintf '1 new message(s):\\n\\n  [now] alice: native owner live\\n\\n'\n",
-    )
-    .unwrap();
+    );
     let helper = repo_root().join("skills/codex-monitor/scripts/cdxm-agmsg-foreground.sh");
     let payload = json!({
         "session_id": "native-owner",
@@ -239,11 +250,10 @@ fn app_hook_cli_enables_continues_rearms_and_disables() {
         .is_file());
 
     let helper = root.join("fake-foreground.sh");
-    fs::write(
+    write_executable(
         &helper,
         "#!/usr/bin/env bash\nprintf '1 new message(s):\\n\\n  [now] alice: hello\\n\\n'\n",
-    )
-    .unwrap();
+    );
     let bash = bash_path();
     for active in [false, true] {
         let payload = json!({
