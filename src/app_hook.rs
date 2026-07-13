@@ -539,10 +539,11 @@ pub fn disable_marker(paths: &AppHookPaths, session_id: &str) -> anyhow::Result<
 
 fn owned_handler(executable: &Path) -> Value {
     let command = format!("\"{}\" __app-stop-hook", executable.display());
+    let command_windows = format!("{} __app-stop-hook", executable.display());
     json!({
         "type": "command",
         "command": command,
-        "commandWindows": command,
+        "commandWindows": command_windows,
         "timeout": APP_HOOK_TIMEOUT_SECONDS,
         "statusMessage": APP_HOOK_STATUS_MESSAGE,
     })
@@ -690,6 +691,18 @@ mod tests {
             HookChange::Unchanged
         );
         assert_eq!(fs::read(&paths.hooks_json).unwrap(), once);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn install_avoids_quotes_in_windows_command_runner_input() {
+        let handler = owned_handler(Path::new(
+            r"C:\Users\codex\.codex-monitor\bin\codex-monitor.exe",
+        ));
+        assert_eq!(
+            handler["commandWindows"],
+            r"C:\Users\codex\.codex-monitor\bin\codex-monitor.exe __app-stop-hook"
+        );
     }
 
     #[test]

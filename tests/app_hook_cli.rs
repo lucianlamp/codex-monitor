@@ -114,6 +114,32 @@ fn app_hook_records_entry_before_cli_validation() {
     assert!(entry["pid"].as_u64().is_some());
 }
 
+#[cfg(windows)]
+#[test]
+fn app_hook_starts_through_codex_windows_command_runner() {
+    let binary = env!("CARGO_BIN_EXE_codex-monitor");
+    let temp = tempfile::tempdir().unwrap();
+    let command_line = format!(r#"{binary} __app-stop-hook"#);
+    let mut command = Command::new("cmd.exe");
+    command
+        .args(["/C", &command_line])
+        .env("CDXM_APP_HOOK_ROOT", temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(br#"{}"#).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+
+    let entry_path = temp.path().join(".codex-monitor/app-hook-last-entry.json");
+    assert!(
+        entry_path.is_file(),
+        "cmd.exe never started codex-monitor; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn installed_foreground_helper_accepts_native_owner_pid() {
     let binary = env!("CARGO_BIN_EXE_codex-monitor");
