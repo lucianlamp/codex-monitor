@@ -232,7 +232,16 @@ fn plan_legacy_environment(
     let Some(current) = inventory.user_codex_cli_path.as_deref() else {
         return Ok(LegacyEnvironmentAction::Preserve);
     };
-    if !paths_equal(current, &expected) {
+    let is_bridge = paths_equal(current, &expected);
+    let is_app_bin = is_codex_app_bin_path(current);
+    if !is_bridge && !is_app_bin {
+        return Ok(LegacyEnvironmentAction::Preserve);
+    }
+    // A CODEX_CLI_PATH that drifted into the Codex App's `OpenAI\Codex\bin` tree
+    // is only ours to reclaim while we still hold the ownership backup. Without
+    // one it is the user's native Codex App CLI and must be kept -- even though
+    // a stale build hash there is exactly what breaks the App's code-mode host.
+    if is_app_bin && !is_bridge && backup.is_none() {
         return Ok(LegacyEnvironmentAction::Preserve);
     }
 
@@ -297,7 +306,7 @@ fn read_owned_bridge_backup(
     let Some(current) = inventory.user_codex_cli_path.as_deref() else {
         return Ok(None);
     };
-    if !paths_equal(current, &legacy_bridge_path(paths)) {
+    if !paths_equal(current, &legacy_bridge_path(paths)) && !is_codex_app_bin_path(current) {
         return Ok(None);
     }
     if !paths.app_bridge_backup.is_file() {
@@ -628,6 +637,14 @@ pub(crate) fn paths_equal(left: &Path, right: &Path) -> bool {
     normalize_path(left.as_os_str()).eq_ignore_ascii_case(&normalize_path(right.as_os_str()))
 }
 
+/// True when `path` lives inside the Codex App's per-user `OpenAI\Codex\bin`
+/// tree. codex-monitor's App bridge fronts exactly that directory, so once we
+/// hold an ownership backup a CODEX_CLI_PATH value there is bridge residue we
+/// can safely reclaim rather than a native value we must preserve.
+fn is_codex_app_bin_path(path: &Path) -> bool {
+    normalized_path_key(&path.to_string_lossy()).contains("\\openai\\codex\\bin\\")
+}
+
 fn normalize_path(path: &OsStr) -> String {
     path.to_string_lossy()
         .replace('/', "\\")
@@ -712,6 +729,69 @@ mod tests {
         let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
         let inventory = fixture_inventory(Some(legacy_bridge_path(&paths)));
         assert!(plan_legacy_environment(&paths, &inventory, None).is_err());
+    }
+
+    #[test]
+    fn drifted_app_bin_cli_with_backup_restores_saved_environment() {
+        // Regression: CODEX_CLI_PATH that drifted from the bridge exe into the
+        // Codex App's `OpenAI\Codex\bin` tree (a stale build hash after the App
+        // updated) must be reclaimed, not stranded, so the App's code-mode host
+        // resolves against the current build again.
+        let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
+        let inventory = fixture_inventory(Some(PathBuf::from(
+            r"C:\Users\me\AppData\Local\OpenAI\Codex\bin\a7c12ebff69fb123\codex.exe",
+        )));
+        let backup = AppBridgeBackup {
+            version: 1,
+            previous_codex_cli_path: None,
+            previous_cdxm_real_codex: None,
+            bridge_path: legacy_bridge_path(&paths),
+        };
+        assert_eq!(
+            plan_legacy_environment(&paths, &inventory, Some(&backup)).unwrap(),
+            LegacyEnvironmentAction::Restore {
+                codex_cli_path: None,
+                cdxm_real_codex: None,
+            }
+        );
+    }
+
+    #[test]
+    fn drifted_app_bin_cli_without_backup_is_preserved() {
+        // No ownership backup means codex-monitor never recorded touching
+        // CODEX_CLI_PATH, so an App-bin value is the user's native CLI: keep it.
+        let paths = InstallPaths::new(PathBuf::from(r"C:\Users\me\.codex-monitor"));
+        let inventory = fixture_inventory(Some(PathBuf::from(
+            r"C:\Users\me\AppData\Local\OpenAI\Codex\bin\a7c12ebff69fb123\codex.exe",
+        )));
+        assert_eq!(
+            plan_legacy_environment(&paths, &inventory, None).unwrap(),
+            LegacyEnvironmentAction::Preserve
+        );
+    }
+
+    #[test]
+    fn read_backup_loads_for_drifted_app_bin_cli() {
+        let temp = TempDir::new().unwrap();
+        let paths = InstallPaths::new(temp.path().join("install"));
+        std::fs::create_dir_all(&paths.root).unwrap();
+        let backup = serde_json::json!({
+            "version": 1,
+            "previousCodexCliPath": null,
+            "previousCdxmRealCodex": null,
+            "bridgePath": legacy_bridge_path(&paths).to_string_lossy(),
+        });
+        std::fs::write(
+            &paths.app_bridge_backup,
+            serde_json::to_vec(&backup).unwrap(),
+        )
+        .unwrap();
+        let inventory = fixture_inventory(Some(PathBuf::from(
+            r"C:\Users\me\AppData\Local\OpenAI\Codex\bin\a7c12ebff69fb123\codex.exe",
+        )));
+        assert!(read_owned_bridge_backup(&paths, &inventory)
+            .unwrap()
+            .is_some());
     }
 
     #[test]

@@ -405,6 +405,27 @@ function Test-CdxmPathEqual {
     }
 }
 
+function Test-CdxmCodexAppBinPath {
+    # True when $Path lives inside the Codex App's per-user OpenAI\Codex\bin
+    # tree. codex-monitor's App bridge fronts exactly that directory, so a
+    # CODEX_CLI_PATH that drifted there is bridge residue we can reclaim once we
+    # still hold the ownership backup -- not a native value to preserve.
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+    try {
+        $full = [IO.Path]::GetFullPath($Path)
+    }
+    catch {
+        return $false
+    }
+    $sep = [IO.Path]::DirectorySeparatorChar
+    $needle = "$sep" + 'OpenAI' + "$sep" + 'Codex' + "$sep" + 'bin' + "$sep"
+    return $full.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
 function Migrate-CdxmLegacyAppBridge {
     $legacyPaths = @($AppBridgeTarget) + @($LegacyRuntimePaths)
     $normalizedLegacyPaths = @($legacyPaths | ForEach-Object { [IO.Path]::GetFullPath($_) })
@@ -414,7 +435,13 @@ function Migrate-CdxmLegacyAppBridge {
             $normalizedLegacyPaths -icontains [IO.Path]::GetFullPath($_.ExecutablePath)
         })
     $currentCli = [Environment]::GetEnvironmentVariable('CODEX_CLI_PATH', 'User')
-    $owned = Test-CdxmPathEqual $currentCli $AppBridgeTarget
+    $hasBackup = Test-Path -LiteralPath $AppBridgeEnvBackup -PathType Leaf
+    $isBridge = Test-CdxmPathEqual $currentCli $AppBridgeTarget
+    $isAppBin = Test-CdxmCodexAppBinPath $currentCli
+    # A CODEX_CLI_PATH that drifted into the Codex App's OpenAI\Codex\bin tree is
+    # only ours to reclaim while we still hold the ownership backup; without one
+    # it is the user's native Codex App CLI and must be preserved.
+    $owned = $isBridge -or ($isAppBin -and $hasBackup)
     $activePaths = @($active | ForEach-Object { [IO.Path]::GetFullPath($_.ExecutablePath) })
     $runtimePrefix = [IO.Path]::GetFullPath($RuntimeDir).TrimEnd('\') + '\'
     $runtimeActive = @($activePaths | Where-Object {
@@ -426,7 +453,7 @@ function Migrate-CdxmLegacyAppBridge {
     }
 
     if ($owned) {
-        if (-not (Test-Path -LiteralPath $AppBridgeEnvBackup -PathType Leaf)) {
+        if (-not $hasBackup) {
             throw "CODEX_CLI_PATH is the legacy bridge but its ownership file is missing: $AppBridgeEnvBackup"
         }
         $backup = Get-Content -LiteralPath $AppBridgeEnvBackup -Raw | ConvertFrom-Json
@@ -442,7 +469,7 @@ function Migrate-CdxmLegacyAppBridge {
         Remove-Item -LiteralPath $AppBridgeEnvBackup -Force
         Write-Host 'Restored the user environment from the legacy App bridge backup.'
     }
-    elseif (Test-Path -LiteralPath $AppBridgeEnvBackup -PathType Leaf) {
+    elseif ($hasBackup) {
         Write-Warning 'Preserving CODEX_CLI_PATH because it is not owned by this codex-monitor installation.'
     }
 
