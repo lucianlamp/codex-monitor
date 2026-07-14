@@ -602,6 +602,50 @@ existing owned LaunchAgents on `$HOME/.codex-monitor/bin/cdxm`. Migration
 preserves cwd, team/name, thread pin, endpoint, mode, DB, logs, and all arguments
 after the executable path; it reloads only the exact matching labels.
 
+## Troubleshooting
+
+### Codex App: `failed to spawn code-mode host` (Windows)
+
+If the Codex / ChatGPT App fails to run tools with an error like:
+
+```
+failed to spawn code-mode host
+...\OpenAI\Codex\bin\<hash>\codex-code-mode-host.exe
+指定されたファイルが見つかりません。 (os error 2)
+```
+
+and the official App **Repair / reinstall does not fix it**, the cause is a
+stale `CODEX_CLI_PATH` **user environment variable** left pointing at an old App
+build hash (`...\OpenAI\Codex\bin\<oldhash>\codex.exe`). The App resolves its
+code-mode host next to that path, but the old build no longer exists after the
+App updated its hash, so the launch fails. Repair never touches user environment
+variables, so it cannot clear this.
+
+Early codex-monitor versions set `CODEX_CLI_PATH` as part of the (now removed)
+App bridge and could leave it stranded. Updating to **v0.2.0 or later**
+(`irm https://raw.githubusercontent.com/lucianlamp/codex-monitor/main/install.ps1 | iex`)
+reclaims a stranded value automatically **when the ownership backup still
+exists**. If it does not, remove the variable manually:
+
+```powershell
+# 1. Inspect the current value (confirm it points into OpenAI\Codex\bin)
+[Environment]::GetEnvironmentVariable('CODEX_CLI_PATH','User')
+
+# 2. Remove it (restores the pre-codex-monitor state)
+[Environment]::SetEnvironmentVariable('CODEX_CLI_PATH', $null, 'User')
+```
+
+Then **fully quit the Codex / ChatGPT App from the tray and relaunch it** — the
+old value is inherited by already-running processes, so a restart is required.
+Verify from a new Codex task:
+
+```powershell
+powershell -NoProfile -Command "Write-Output ('codex-host-ok ' + [DateTime]::Now.ToString('HH:mm:ss'))"
+```
+
+This only removes a value codex-monitor itself set; a `CODEX_CLI_PATH` you rely
+on for your own tooling should be repointed rather than deleted.
+
 ## Safety
 
 - codex-monitor never auto-approves Codex app-server requests.
